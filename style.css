@@ -12,7 +12,6 @@
     --accent-color: #34495e; 
     --today-highlight: #1976d2; 
     
-    /* 印章顏色 */
     --stamp-add-color: #d84315; 
     --stamp-add-border: #d84315;
     --stamp-off-color: #1565c0; 
@@ -24,34 +23,35 @@
 * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
 
 body {
-    margin: 0;
-    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+    font-family: -apple-system, BlinkMacSystemFont, Roboto, Helvetica, Arial, sans-serif;
     background-color: var(--bg-app);
+    margin: 0; padding: 10px;
     color: var(--text-main);
-    padding-bottom: 70px;
-    overflow-x: hidden;
+    overscroll-behavior-y: none;
 }
 
 .container {
-    max-width: 600px;
-    margin: 0 auto;
+    max-width: 600px; margin: 0 auto;
     background: var(--bg-card);
-    min-height: 100vh;
+    padding: 15px;
+    border-radius: 20px;
+    box-shadow: var(--shadow-card);
+    min-height: 95vh;
+    display: flex; flex-direction: column;
     position: relative;
 }
 
-/* 頂部導航 */
+/* 導航控制列 */
 .controls-wrapper {
     display: flex; justify-content: space-between; align-items: center;
-    padding: 15px; border-bottom: 1px solid #f0f0f0;
-    position: sticky; top: 0; background: white; z-index: 10;
+    margin-bottom: 10px; padding-bottom: 10px;
+    border-bottom: 1px solid #f0f0f0;
 }
-
 .nav-area { display: flex; align-items: center; gap: 8px; cursor: pointer; user-select: none; }
 .month-display { font-size: 1.2rem; font-weight: 800; color: var(--text-main); min-width: 60px; text-align: center; }
 .nav-btn {
-    background: #f8f9fa; border: none; border-radius: 50%; width: 32px; height: 32px;
-    display: flex; justify-content: center; align-items: center;
+    background: #f8f9fa; border: none; border-radius: 50%;
+    width: 32px; height: 32px; display: flex; justify-content: center; align-items: center;
     font-size: 0.9rem; color: var(--text-main); cursor: pointer;
 }
 
@@ -61,10 +61,14 @@ body {
     background-color: #333; color: white;
     box-shadow: 0 2px 5px rgba(0,0,0,0.1);
 }
-.edit-btn.saving { background-color: #d32f2f; }
+.edit-btn.logout { background-color: #90a4ae; }
+.edit-btn:active { transform: scale(0.95); }
+.edit-btn.saving { background-color: #d32f2f; animation: pulse 1.5s infinite; }
+@keyframes pulse { 0% { opacity: 1; } 50% { opacity: 0.8; } 100% { opacity: 1; } }
+body.editing-mode .container { border: 2px solid #ffcdd2; }
 
-/* 快速連結 */
-.quick-links { display: flex; justify-content: center; gap: 8px; margin: 15px 0; }
+/* 快速跳轉 */
+.quick-links { display: flex; justify-content: center; gap: 8px; margin-bottom: 15px; }
 .month-btn {
     border: none; background: #f0f0f0; color: #999;
     width: 36px; height: 36px; border-radius: 10px;
@@ -73,41 +77,48 @@ body {
 .month-btn.active { background-color: var(--today-highlight); color: white; transform: translateY(-2px); }
 
 /* 日曆表格 */
-#calendar-container { padding: 5px; }
-.month-block { margin-bottom: 20px; }
-table.calendar { width: 100%; border-collapse: separate; border-spacing: 3px; table-layout: fixed; }
+.month-block { flex-grow: 1; }
+.calendar { width: 100%; border-collapse: separate; border-spacing: 3px; table-layout: fixed; }
+th, td { width: 14.28%; }
 th { padding: 5px 0; color: var(--text-sub); font-size: 0.75em; font-weight: 600; text-align: center; }
+
 td {
     height: 55px; vertical-align: middle; padding: 0;
-    border-radius: 8px; background-color: white;
-    position: relative; cursor: pointer;
-    border: 1px solid transparent; overflow: hidden;
+    border-radius: 8px; background-color: white; position: relative;
+    cursor: pointer; border: 1px solid transparent; overflow: hidden; 
 }
 
 td.is-work { background-color: var(--work-bg); border: 1px solid var(--work-border); }
 td.is-rest { background-color: var(--rest-bg); border: 1px solid var(--rest-border); }
+td.empty { background: none; border: none; cursor: default; }
+
+.cell-content { 
+    display: flex; flex-direction: column; justify-content: flex-start; align-items: center; 
+    height: 100%; width: 100%; z-index: 1;
+}
 
 .date-num {
     font-size: 0.9em; font-weight: 600; color: var(--text-main);
-    width: 22px; height: 22px; display: flex; justify-content: center; align-items: center;
-    border-radius: 50%; margin-bottom: 4px;
+    width: 22px; height: 22px; display: flex; justify-content: center; align-items: center; border-radius: 50%;
+    margin-bottom: 4px;
 }
-.is-today { background-color: var(--today-highlight); color: white; }
+.date-num.is-today { background-color: var(--today-highlight); color: white; }
 
-.cell-content { display: flex; flex-direction: column; justify-content: flex-start; align-items: center; height: 100%; width: 100%; z-index: 1; }
+/* 班別文字 */
 .shift-group { display: flex; flex-direction: column; align-items: center; line-height: 1; margin-top: 1px; }
 .shift-upper { font-size: 0.75em; font-weight: 700; color: var(--text-sub); white-space: nowrap; }
 .shift-lower { font-size: 0.65em; font-weight: normal; color: var(--text-sub); opacity: 0.9; margin-top: 1px; white-space: nowrap; }
-
 td.is-work .shift-upper { color: #c0392b; font-weight: 800; }
 td.is-work .shift-lower { color: #e74c3c; }
 td.is-rest .shift-upper { color: #27ae60; }
 td.is-rest .shift-lower { color: #2ecc71; }
 
+/* 印章 */
 .stamp {
-    position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%) rotate(-15deg);
+    position: absolute; top: 50%; left: 50%;
+    transform: translate(-50%, -50%) rotate(-15deg);
     border: 2px solid; border-radius: 6px; padding: 1px 4px;
-    background-color: rgba(255, 255, 255, 0.9);
+    background-color: rgba(255, 255, 255, 0.9); box-shadow: 0 2px 5px rgba(0,0,0,0.1);
     display: flex; flex-direction: column; align-items: center; justify-content: center;
     font-size: 0.7rem; font-weight: 900; line-height: 1.1; white-space: nowrap;
     z-index: 10; pointer-events: none;
@@ -118,7 +129,7 @@ td.is-rest .shift-lower { color: #2ecc71; }
 /* 統計區 */
 .month-stats { margin-top: auto; padding-top: 15px; border-top: 1px dashed #eee; }
 .stat-group-title { font-size: 0.75rem; color: var(--text-sub); margin-bottom: 8px; font-weight: 700; border-left: 3px solid var(--accent-color); padding-left: 6px; }
-.stats-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 5px; margin-bottom: 15px; }
+.stats-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin-bottom: 15px; }
 .stat-card { background: #f8f9fa; padding: 8px 4px; border-radius: 8px; text-align: center; border: 1px solid #eee; }
 .stat-label { font-size: 0.65rem; color: #888; display: block; margin-bottom: 2px; }
 .stat-value { font-size: 0.95rem; font-weight: 800; color: var(--text-main); }
@@ -126,37 +137,89 @@ td.is-rest .shift-lower { color: #2ecc71; }
 .stat-value.highlight { color: var(--today-highlight); }
 .stat-value.overtime { color: var(--stamp-add-color); }
 
-/* 頁籤 */
-.tab-group { display: flex; background: #e0e0e0; border-radius: 12px; padding: 4px; margin: 15px; }
+/* Loading & Auth */
+.loading-overlay {
+    position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+    background-color: white; display: none; justify-content: center; align-items: center; z-index: 9999; flex-direction: column;
+}
+.loading-overlay.show { display: flex; }
+.spinner { width: 40px; height: 40px; border: 4px solid #f3f3f3; border-top: 4px solid var(--today-highlight); border-radius: 50%; animation: spin 1s linear infinite; margin-bottom: 10px; }
+.loading-text { font-weight: bold; color: var(--text-sub); font-size: 0.9rem; }
+@keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
+
+/* 登入註冊樣式 */
+.auth-overlay {
+    position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+    background-color: var(--bg-app); display: flex; justify-content: center; align-items: center; z-index: 10000;
+}
+.auth-box {
+    background: white; width: 85%; max-width: 350px; padding: 30px;
+    border-radius: 20px; box-shadow: 0 10px 40px rgba(0,0,0,0.1); text-align: center;
+}
+.auth-box h2 { margin-top: 0; color: var(--accent-color); }
+.auth-tabs { display: flex; margin-bottom: 20px; border-bottom: 2px solid #eee; }
+.auth-tab { flex: 1; padding: 10px; border: none; background: none; font-size: 1rem; font-weight: bold; color: #aaa; cursor: pointer; }
+.auth-tab.active { color: var(--today-highlight); border-bottom: 3px solid var(--today-highlight); }
+.form-group { margin-bottom: 15px; text-align: left; }
+.form-group label { display: block; font-size: 0.85rem; color: #666; margin-bottom: 5px; font-weight: bold; }
+.auth-form input, .group-select {
+    width: 100%; padding: 12px; border: 2px solid #eee; border-radius: 10px;
+    font-size: 1rem; box-sizing: border-box; transition: 0.3s;
+}
+.auth-form input:focus { border-color: var(--today-highlight); outline: none; }
+.auth-action-btn {
+    width: 100%; padding: 12px; border: none; border-radius: 10px;
+    background: var(--today-highlight); color: white; font-size: 1.1rem; font-weight: bold; cursor: pointer;
+    margin-top: 10px; box-shadow: 0 4px 10px rgba(25, 118, 210, 0.3);
+}
+.register-btn { background: var(--stamp-add-color); box-shadow: 0 4px 10px rgba(216, 67, 21, 0.3); }
+.auth-footer { margin-top: 20px; font-size: 0.75rem; color: #999; }
+.user-info-display { font-size: 0.8rem; color: var(--accent-color); font-weight: bold; }
+
+/* Modal & Tabs */
+.modal-overlay { position: fixed; top: 0; left: 0; width: 100%; height: 100%; background-color: rgba(255,255,255,0.1); backdrop-filter: blur(5px); display: none; justify-content: center; align-items: center; z-index: 2000; }
+.modal-overlay.show { display: flex; animation: zoomIn 0.2s; }
+.modal-content { background: white; padding: 25px; border-radius: 20px; width: 80%; max-width: 300px; text-align: center; box-shadow: 0 10px 30px rgba(0,0,0,0.15); border: 1px solid #eee; display: flex; flex-direction: column; max-height: 85vh; }
+@keyframes zoomIn { from { transform: scale(0.9); opacity: 0; } to { transform: scale(1); opacity: 1; } }
+.modal-title { font-size: 1.2rem; font-weight: 800; margin-bottom: 5px; }
+.modal-subtitle { font-size: 0.8rem; color: #666; margin-bottom: 10px; }
+.modal-options { display: flex; flex-direction: column; gap: 8px; }
+.modal-options.scrollable { overflow-y: auto; flex-grow: 1; padding-right: 5px; }
+.opt-group-label { font-size: 0.75rem; font-weight: bold; color: var(--accent-color); margin: 10px 0 5px 0; text-align: left; border-bottom: 1px solid #eee; padding-bottom: 2px; }
+.option-btn { padding: 12px; border: 1px solid #f0f0f0; border-radius: 12px; background: #fff; font-size: 0.95rem; font-weight: 600; color: #444; }
+.option-btn.selected { background-color: #e3f2fd; border-color: #2196f3; color: #1565c0; position: relative; }
+.option-btn.selected::after { content: '✔'; position: absolute; right: 15px; font-weight: bold; }
+.modal-footer { margin-top: 15px; display: flex; gap: 10px; }
+.btn-secondary { flex: 1; border: none; background: #f5f5f5; color: #666; padding: 10px; border-radius: 10px; font-weight: bold; }
+.btn-primary { flex: 1; border: none; background: #333; color: white; padding: 10px; border-radius: 10px; font-weight: bold; }
+
+.tab-group { display: flex; background: #e0e0e0; border-radius: 12px; padding: 4px; margin-bottom: 15px; }
 .tab-btn { flex: 1; border: none; background: transparent; padding: 10px; border-radius: 10px; font-size: 0.95rem; font-weight: 600; color: #666; cursor: pointer; transition: all 0.2s; }
 .tab-btn.active { background: white; color: var(--text-main); box-shadow: 0 2px 5px rgba(0,0,0,0.1); }
-
 .view-section { display: none; animation: fadeIn 0.3s; }
 .view-section.active { display: block; }
 @keyframes fadeIn { from { opacity: 0; transform: translateY(5px); } to { opacity: 1; transform: translateY(0); } }
 
-/* 補休管理 (三欄並排) */
-.stats-page-container.compact-layout { padding: 10px; gap: 10px; display: flex; flex-direction: column; }
+/* 補休頁面樣式 */
+.stats-page-container { padding: 10px 5px; display: flex; flex-direction: column; gap: 10px; }
+.stats-page-container.compact-layout { padding: 5px 10px; gap: 8px; }
 .page-title { text-align: center; font-size: 1.2rem; color: var(--text-main); margin: 0 0 15px 0; }
-
-.stats-row.three-cols { display: flex; justify-content: space-between; align-items: center; gap: 2px; }
-.input-card.small-card { background: #f8f9fa; padding: 10px 5px; border-radius: 12px; border: 1px solid #eee; flex: 1; min-width: 0; text-align: center; }
-.input-card.small-card label { font-size: 0.8rem; color: #666; margin-bottom: 4px; white-space: nowrap; display: block; }
-.input-card.small-card input { width: 100%; padding: 5px; border: 1px solid #ddd; border-radius: 8px; text-align: center; font-size: 1.2rem; font-weight: 800; color: #333; background: white; }
-.input-card.readonly { background: #f0f4f8; border-color: #e1e8ed; }
-.input-card.readonly input { background: transparent; border: none; color: #555; }
-
+.stats-row { display: flex; justify-content: space-between; align-items: center; gap: 2px; }
+.input-card { background: #f8f9fa; padding: 15px; border-radius: 12px; border: 1px solid #eee; display: flex; flex-direction: column; align-items: center; }
+.input-card.small-card { padding: 8px 5px; flex: 1; min-width: 0; }
+.input-card label { font-size: 0.8rem; color: #666; margin-bottom: 4px; white-space: nowrap; font-weight: bold; }
+.input-card input { width: 100%; border: 2px solid #ddd; border-radius: 8px; text-align: center; font-size: 1.3rem; font-weight: 800; color: #333; background: white; height: 40px; }
+.input-card.readonly input { background-color: #f0f0f0; color: #555; border: none; }
+.input-card input:focus { border-color: var(--today-highlight); outline: none; }
 .math-symbol-mini { font-size: 1rem; color: #ccc; font-weight: bold; padding: 0 1px; }
-.math-symbol-small { text-align: center; font-size: 1.2rem; color: #ccc; font-weight: bold; margin: 5px 0; }
-
+.math-symbol-small { text-align: center; font-size: 1.2rem; color: #ccc; font-weight: bold; }
 .result-container { display: flex; flex-direction: column; align-items: center; }
 .result-card.light-theme { background-color: #f0f0f0; color: #333; border: 1px solid #ddd; width: 100%; padding: 15px; margin-top: 5px; border-radius: 12px; text-align: center; }
-.result-card.light-theme label { color: #666; font-size: 0.9rem; margin-bottom: 5px; display: block; }
-.result-card.light-theme .big-balance { font-size: 2.2rem; font-weight: 800; color: #333; }
+.result-card label { font-size: 0.9rem; margin-bottom: 5px; display: block; }
+.big-balance { font-size: 2.2rem; font-weight: 800; color: #333; }
+.save-stats-btn { background: var(--stamp-add-color); color: white; border: none; padding: 15px; border-radius: 50px; font-size: 1.1rem; font-weight: bold; margin-top: 15px; cursor: pointer; box-shadow: 0 4px 10px rgba(230, 81, 0, 0.3); width: 100%; display: block; }
 
-.save-stats-btn.permanent-btn { display: block !important; margin-top: 15px; padding: 12px; width: 100%; font-size: 1rem; background: var(--stamp-add-color); color: white; border: none; border-radius: 8px; font-weight: bold; cursor: pointer; box-shadow: 0 4px 10px rgba(230, 81, 0, 0.3); }
-
-/* 圖片勤務表 */
+/* 勤務表頁面樣式 */
 .image-page-container { padding: 10px; display: flex; flex-direction: column; gap: 15px; padding-bottom: 80px; }
 .upload-card, .roster-list-area { background: white; border-radius: 12px; padding: 15px; box-shadow: 0 2px 8px rgba(0,0,0,0.05); border: 1px solid #eee; }
 .card-title { font-size: 1rem; color: #333; margin: 0 0 10px 0; border-left: 4px solid var(--accent-color); padding-left: 8px; }
@@ -174,34 +237,340 @@ td.is-rest .shift-lower { color: #2ecc71; }
 /* 圖片檢視器 */
 .image-viewer-content { background: black; padding: 0; height: 80vh; display: flex; flex-direction: column; }
 .modal-header { display: flex; justify-content: space-between; align-items: center; padding: 15px; background: #333; color: white; }
-.close-icon { background: none; border: none; color: white; font-size: 1.5rem; cursor: pointer; }
+.close-icon {
+    position: absolute;    /* 強制定位 */
+    right: 15px;           /* 靠右 */
+    top: 50%;              /* 垂直置中 */
+    transform: translateY(-50%); /* 修正垂直置中 */
+    
+    background: rgba(0, 0, 0, 0.5); /* 半透明黑底，增加辨識度 */
+    border: 1px solid rgba(255, 255, 255, 0.3);
+    border-radius: 50%;    /* 變成圓形按鈕 */
+    color: white;
+    
+    font-size: 1.5rem;     /* 叉叉大小 */
+    width: 40px;           /* 按鈕寬度 */
+    height: 40px;          /* 按鈕高度 */
+    
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    z-index: 3000;         /* 超高層級，比 Modal 的 2000 還高 */
+}
+
+/* 建議順便加強 header 樣式，避免被圖片蓋住 */
+.modal-header {
+    position: relative;
+    padding: 15px 60px 15px 15px; /* 右邊多留空間給按鈕 */
+    background: #333;
+    color: white;
+    display: flex;
+    align-items: center;
+    min-height: 60px;
+}
 .image-wrapper { flex: 1; overflow: auto; display: flex; justify-content: center; align-items: center; background: #000; }
 #viewerImage { max-width: 100%; max-height: 100%; object-fit: contain; }
-.btn-delete { width: 100%; background: #d32f2f; color: white; border: none; padding: 15px; font-size: 1rem; font-weight: bold; }
+.btn-delete { width: 100%; background: #d32f2f; color: white; border: none; padding: 15px; font-size: 1rem; }
 
-/* Loading & Modal */
-#loadingOverlay { position: fixed; top: 0; left: 0; width: 100%; height: 100%; background-color: white; display: none; justify-content: center; align-items: center; z-index: 9999; flex-direction: column; }
-#loadingOverlay.show { display: flex; }
-.spinner { width: 40px; height: 40px; border: 4px solid #f3f3f3; border-top: 4px solid var(--today-highlight); border-radius: 50%; animation: spin 1s linear infinite; margin-bottom: 10px; }
-@keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
-
-.modal-overlay { position: fixed; top: 0; left: 0; width: 100%; height: 100%; background-color: rgba(255,255,255,0.1); backdrop-filter: blur(5px); display: none; justify-content: center; align-items: center; z-index: 100; }
-.modal-overlay.show { display: flex; animation: zoomIn 0.2s; }
-.modal-content { background: white; padding: 25px; border-radius: 20px; width: 80%; max-width: 300px; text-align: center; box-shadow: 0 10px 30px rgba(0,0,0,0.15); border: 1px solid #eee; }
-@keyframes zoomIn { from { transform: scale(0.9); opacity: 0; } to { transform: scale(1); opacity: 1; } }
-.modal-title { font-size: 1.2rem; font-weight: 800; margin-bottom: 15px; }
-.modal-options.scrollable { overflow-y: auto; flex-grow: 1; padding: 0 15px 15px 15px; max-height: 60vh; display: flex; flex-direction: column; gap: 8px; }
-.opt-group-label { font-size: 0.75rem; font-weight: bold; color: var(--accent-color); margin: 10px 0 5px 0; text-align: left; border-bottom: 1px solid #eee; padding-bottom: 2px; }
-.option-btn { padding: 12px; border: 1px solid #f0f0f0; border-radius: 12px; background: #fff; font-size: 0.95rem; font-weight: 600; color: #444; }
-.option-btn.selected { background-color: #e3f2fd; border-color: #2196f3; color: #1565c0; }
-.modal-footer { margin-top: 15px; display: flex; gap: 10px; }
-.btn-secondary { flex: 1; border: none; background: #f5f5f5; color: #666; padding: 10px; border-radius: 10px; font-weight: bold; }
-.btn-primary { flex: 1; border: none; background: #333; color: white; padding: 10px; border-radius: 10px; font-weight: bold; }
-
-/* 訪客模式樣式 */
+/* 訪客模式 (Guest Mode) */
 body.guest-mode #editBtn { display: none !important; }
-body.guest-mode #inputReserved { pointer-events: none; background-color: #f9f9f9; color: #666; border-color: transparent; }
-body.guest-mode #saveStatsBtn { display: none !important; }
-body.guest-mode .upload-card { display: none !important; }
-body.guest-mode .btn-delete { display: none !important; }
-.nav-area { cursor: pointer; user-select: none; }
+body.guest-mode #inputReserved, body.guest-mode #inputUsed { pointer-events: none; background-color: #f9f9f9; color: #666; border-color: transparent; }
+body.guest-mode #saveStatsBtn, body.guest-mode .upload-card, body.guest-mode .btn-delete { display: none !important; }
+
+/* ★★★ 右上角使用者選單樣式 ★★★ */
+.user-menu-container {
+    position: relative;
+    z-index: 500;
+}
+
+.user-name-btn {
+    background-color: #f0f4f8;
+    padding: 8px 12px;
+    border-radius: 20px;
+    font-size: 0.85rem;
+    font-weight: bold;
+    color: var(--accent-color);
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    border: 1px solid #e1e8ed;
+    transition: all 0.2s;
+}
+
+.user-name-btn:active {
+    background-color: #e3f2fd;
+    transform: scale(0.98);
+}
+
+.dropdown-arrow {
+    font-size: 0.6rem;
+    color: #999;
+}
+
+/* 下拉選單本體 */
+.user-dropdown {
+    display: none;
+    position: absolute;
+    top: 115%;
+    right: 0;
+    width: 150px;
+    background: white;
+    border-radius: 12px;
+    box-shadow: 0 4px 15px rgba(0,0,0,0.15);
+    border: 1px solid #eee;
+    padding: 5px;
+    flex-direction: column;
+    animation: slideDown 0.2s ease-out;
+}
+
+.user-dropdown.show {
+    display: flex;
+}
+
+@keyframes slideDown {
+    from { opacity: 0; transform: translateY(-10px); }
+    to { opacity: 1; transform: translateY(0); }
+}
+
+/* 選單按鈕 */
+.menu-item {
+    background: none;
+    border: none;
+    padding: 12px;
+    font-size: 0.95rem;
+    font-weight: bold;
+    color: var(--text-main);
+    text-align: left;
+    border-radius: 8px;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.menu-item:active {
+    background-color: #f5f5f5;
+}
+
+/* 修改模式中的樣式 */
+.menu-item.saving {
+    color: #d32f2f;
+    background-color: #ffebee;
+}
+
+.menu-item.logout {
+    color: #90a4ae;
+    border-top: 1px solid #eee;
+    margin-top: 2px;
+}
+
+/* 讓原本的導航區不再有手指游標 (取消三連擊提示) */
+.nav-area {
+    cursor: default;
+    user-select: none;
+}
+
+/* 加寬的按鈕樣式 */
+.month-btn.long-btn {
+    width: auto;
+    padding: 0 20px;
+    background-color: #e3f2fd;
+    color: #1565c0;
+    border: 1px solid #bbdefb;
+}
+
+/* 人員列表 Modal */
+#userListModal.modal-overlay {
+    position: fixed;      /* 固定定位 */
+    top: 0; 
+    left: 0; 
+    width: 100%; 
+    height: 100%;
+    background-color: rgba(0,0,0,0.5); /* 半透明黑底 */
+    backdrop-filter: blur(2px);
+    z-index: 9999;        /* 確保在最上面 */
+    
+    /* 彈性佈局讓內容置中 */
+    display: none;        
+    justify-content: center; 
+    align-items: center; 
+}
+
+/* 顯示時的狀態 */
+#userListModal.modal-overlay.show {
+    display: flex; 
+}
+
+/* 2. Modal 內容區塊 */
+.user-list-content {
+    background: white;
+    width: 85%; 
+    max-width: 400px; 
+    max-height: 70vh;     /* 限制高度，避免太長 */
+    border-radius: 15px;
+    box-shadow: 0 10px 25px rgba(0,0,0,0.2);
+    display: flex; 
+    flex-direction: column;
+    overflow: hidden;     /* 內部捲動 */
+    position: relative;   /* 讓關閉按鈕可以定位 */
+}
+
+/* 3. 列表捲動區 */
+.user-list-wrapper {
+    flex: 1; 
+    overflow-y: auto;     /* 只有這裡捲動 */
+    padding: 10px; 
+    background: #f5f7fa;
+}
+
+/* 4. 單個使用者項目 */
+.user-item {
+    display: flex; 
+    justify-content: space-between; 
+    align-items: center;
+    background: white; 
+    padding: 15px; 
+    margin-bottom: 10px;
+    border-radius: 10px; 
+    border: 1px solid #eee;
+    box-shadow: 0 2px 5px rgba(0,0,0,0.02);
+    cursor: pointer; 
+    transition: transform 0.1s;
+}
+
+.user-item:active { 
+    transform: scale(0.98); 
+    background-color: #e3f2fd; 
+}
+
+.user-item-info { 
+    display: flex; 
+    flex-direction: column; 
+    flex: 1; /* 佔滿剩餘空間 */
+}
+
+.u-name { 
+    font-weight: 800; 
+    font-size: 1rem; 
+    color: #2c3e50; 
+}
+
+.u-group { 
+    font-size: 0.85rem; 
+    color: #7f8c8d; 
+    margin-top: 2px; 
+}
+
+/* 5. 刪除按鈕 */
+.delete-user-btn {
+    background: #fff0f0; 
+    color: #d32f2f;
+    border: 1px solid #ffcdd2; 
+    border-radius: 8px;
+    padding: 8px 12px; 
+    font-size: 0.85rem; 
+    font-weight: bold;
+    cursor: pointer; 
+    margin-left: 10px;
+    white-space: nowrap; /* 防止文字換行 */
+}
+
+/* 6. 觀看他人模式的黃色警示條 (確保不會擠壞版面) */
+.viewing-alert {
+    background-color: #fff8e1; 
+    color: #8d6e63;
+    padding: 10px 15px; 
+    margin: 10px 0; 
+    border-radius: 12px;
+    display: flex; 
+    justify-content: space-between; 
+    align-items: center;
+    border: 2px solid #ffe0b2; 
+    box-shadow: 0 2px 8px rgba(0,0,0,0.05);
+}
+
+.exit-view-btn {
+    background: #ffb74d; 
+    color: white; 
+    border: none;
+    padding: 6px 15px; 
+    border-radius: 20px; 
+    font-size: 0.85rem; 
+    font-weight: bold; 
+    cursor: pointer;
+    box-shadow: 0 2px 5px rgba(0,0,0,0.1);
+}
+
+/* ★★★ 強制修復勤務表關閉按鈕 ★★★ */
+
+/* 1. 確保黑色背景視窗層級最高，蓋過選單 */
+#imageViewerModal.modal-overlay {
+    z-index: 9999 !important; 
+}
+
+/* 2. 確保關閉按鈕 (XX) 絕對定位且好按 */
+#imageViewerModal .close-icon {
+    position: absolute !important;
+    top: 15px !important;
+    right: 15px !important;
+    width: 45px !important;
+    height: 45px !important;
+    background: rgba(0, 0, 0, 0.6) !important;
+    border: 2px solid rgba(255, 255, 255, 0.5) !important;
+    border-radius: 50% !important;
+    color: #fff !important;
+    font-size: 1.5rem !important;
+    z-index: 10000 !important; /* 比視窗還高 */
+    cursor: pointer !important;
+    display: flex !important;
+    justify-content: center !important;
+    align-items: center !important;
+    pointer-events: auto !important; /* 強制接收點擊 */
+}
+
+/* 3. 調整標題列，避免擋住按鈕 */
+#imageViewerModal .modal-header {
+    position: relative !important;
+    z-index: 5 !important;
+    padding-right: 70px !important; /* 留位置給按鈕 */
+}
+
+/* 切換備份檢視的按鈕 */
+.toggle-backup-btn {
+    background: #e0f7fa; color: #006064;
+    border: 1px solid #b2ebf2; border-radius: 15px;
+    padding: 4px 10px; font-size: 0.8rem; font-weight: bold;
+    cursor: pointer; transition: all 0.2s;
+}
+
+.toggle-backup-btn.active {
+    background: #006064; color: white;
+}
+
+/* 復原按鈕 */
+.restore-btn {
+    background: #e8f5e9; color: #2e7d32;
+    border: 1px solid #c8e6c9; border-radius: 8px;
+    padding: 5px 12px; font-size: 0.85rem; font-weight: bold;
+    cursor: pointer; margin-left: auto;
+}
+
+/* 永久刪除按鈕 (紅色垃圾桶) */
+.perm-delete-btn {
+    background: #ffebee; 
+    color: #c62828;
+    border: 1px solid #ffcdd2; 
+    border-radius: 8px;
+    padding: 5px 10px; 
+    font-size: 0.9rem; 
+    cursor: pointer;
+    transition: all 0.2s;
+}
+
+.perm-delete-btn:active {
+    background: #ef9a9a;
+    color: white;
+}
+

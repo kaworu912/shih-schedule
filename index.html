@@ -3,30 +3,102 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>2026班表</title>
+    <title>班表系統</title>
     <link rel="stylesheet" href="style.css">
 </head>
-<body> <div id="loadingOverlay" class="loading-overlay">
+<body>
+
+    <div id="loadingOverlay" class="loading-overlay">
         <div class="spinner"></div>
         <div class="loading-text">資料同步中...</div>
+    </div>
+
+    <div id="authModal" class="auth-overlay">
+        <div class="auth-box">
+            <h2 id="authTitle">歡迎使用班表系統</h2>
+            
+            <div class="auth-tabs">
+                <button class="auth-tab active" onclick="switchAuthMode('login')">登入</button>
+                <button class="auth-tab" onclick="switchAuthMode('register')">註冊</button>
+            </div>
+
+            <div id="loginForm" class="auth-form">
+                <div class="form-group">
+                    <label>暱稱 (帳號)</label>
+                    <input type="text" id="loginUser" placeholder="請輸入暱稱">
+                </div>
+                <div class="form-group">
+                    <label>密碼</label>
+                    <input type="password" id="loginPass" placeholder="請輸入密碼">
+                </div>
+                <button class="auth-action-btn" onclick="doLogin()">登入</button>
+            </div>
+
+            <div id="registerForm" class="auth-form" style="display:none;">
+                <div class="form-group">
+                    <label>設定暱稱 (帳號)</label>
+                    <input type="text" id="regUser" placeholder="例如: Wang">
+                </div>
+                <div class="form-group">
+                    <label>設定密碼</label>
+                    <input type="password" id="regPass" placeholder="自訂密碼">
+                </div>
+                <div class="form-group">
+                    <label>所屬組別</label>
+                    <select id="regGroup" class="group-select">
+                        <option value="甲1">甲1</option>
+                        <option value="甲2">甲2</option>
+                        <option value="甲3">甲3</option>
+                        <option value="乙1">乙1</option>
+                        <option value="乙2">乙2</option>
+                        <option value="乙3">乙3</option>
+                    </select>
+                </div>
+                <button class="auth-action-btn register-btn" onclick="doRegister()">註冊帳號</button>
+            </div>
+            
+            <p class="auth-footer">若是公共電腦請記得登出</p>
+        </div>
     </div>
 
     <div class="container">
         
         <div class="controls-wrapper">
-            <div class="nav-area" onclick="handleTripleClick()">
-                <button id="prevBtn" class="nav-btn" onclick="changeMonth(-1); event.stopPropagation();">❮</button>
+            <div class="nav-area">
+                <button id="prevBtn" class="nav-btn" onclick="changeMonth(-1)">❮</button>
                 <div class="month-display" id="currentMonthDisplay">1月</div>
-                <button id="nextBtn" class="nav-btn" onclick="changeMonth(1); event.stopPropagation();">❯</button>
+                <button id="nextBtn" class="nav-btn" onclick="changeMonth(1)">❯</button>
             </div>
-            <button id="editBtn" class="edit-btn" onclick="toggleEditMode()">修改</button>
+
+            <div class="user-menu-container">
+                <div class="user-name-btn" onclick="toggleUserMenu()">
+                    <span id="userInfoDisplay">未登入</span>
+                    <span class="dropdown-arrow">▼</span>
+                </div>
+
+                <div id="userDropdown" class="user-dropdown">
+                    <button class="menu-item" id="menuEditBtn" onclick="toggleEditMode()">
+                        🔧 修改班表
+                    </button>
+                    <button class="menu-item" onclick="openUserListModal()">
+                        👀 觀看他人
+                    </button>
+                    <button class="menu-item logout" onclick="doLogout()">
+                        🚪 登出系統
+                    </button>
+                </div>
+            </div>
+        </div>
+
+        <div id="viewingOtherAlert" class="viewing-alert" style="display:none;">
+            <span>正在觀看: <strong id="viewingTargetName">Name</strong></span>
+            <button class="exit-view-btn" onclick="exitViewMode()">返回我的班表</button>
         </div>
 
         <div class="quick-links">
-            <button class="month-btn" onclick="jumpToMonth(0)">12</button>
-            <button class="month-btn" onclick="jumpToMonth(1)">1</button>
-            <button class="month-btn" onclick="jumpToMonth(2)">2</button>
-            <button class="month-btn" onclick="jumpToMonth(3)">3</button>
+            <button class="month-btn long-btn" onclick="jumpToToday()">
+                📍 回到今天
+            </button>
         </div>
         
         <div class="tab-group">
@@ -45,25 +117,22 @@
                 
                 <div class="stats-row three-cols">
                     <div class="input-card small-card">
-                        <label>預留</label>
+                        <label>本月預留</label>
                         <input type="number" id="inputReserved" value="0" placeholder="0" 
+                               disabled
                                oninput="calculateBalance()" 
                                onfocus="if(this.value=='0') this.value=''" 
                                onblur="if(this.value=='') this.value='0'">
                     </div>
-                    
                     <div class="math-symbol-mini">-</div>
-        
                     <div class="input-card small-card readonly">
                         <label>已使用</label>
-                        <input type="number" id="inputUsed" value="0" readonly style="background-color: #f0f0f0; color:#555;">
+                        <input type="number" id="inputUsed" value="0" readonly>
                     </div>
-        
                     <div class="math-symbol-mini">-</div>
-        
                     <div class="input-card small-card readonly">
                         <label>未使用</label>
-                        <input type="number" id="inputUnused" value="0" readonly style="background-color: #f0f0f0; color:#555;">
+                        <input type="number" id="inputUnused" value="0" readonly>
                     </div>
                 </div>
                 
@@ -74,25 +143,18 @@
                         <span id="txtBalance" class="big-balance">0</span>
                     </div>
                 </div>
-                
-                <button id="saveStatsBtn" class="save-stats-btn permanent-btn" onclick="saveStatsData()">
-                    💾 儲存
-                </button>
             </div>
         </div>
 
         <div id="view-image" class="view-section">
             <div class="image-page-container">
-                
                 <div class="upload-card">
                     <h3 class="card-title">新增勤務表</h3>
                     <div class="upload-row">
                         <input type="date" id="rosterDateInput" class="date-input">
                     </div>
                     <div class="upload-row">
-                        <label for="rosterFileInput" class="file-btn">
-                            📂 選擇圖片
-                        </label>
+                        <label for="rosterFileInput" class="file-btn">📂 選擇圖片</label>
                         <input type="file" id="rosterFileInput" accept="image/*" style="display: none;" onchange="handleRosterSelect(event)">
                         <span id="fileNameDisplay" class="file-name">未選擇檔案</span>
                     </div>
@@ -111,8 +173,10 @@
         <div id="imageViewerModal" class="modal-overlay" onclick="closeImageModal(event)">
             <div class="modal-content image-viewer-content">
                 <div class="modal-header">
-                    <span id="viewerDateTitle"></span>
-                    <button class="close-icon" onclick="closeImageModalDirect()">✕</button>
+                    <span id="viewerDateTitle">日期</span>
+                    
+                    <button type="button" class="close-icon" onclick="event.stopPropagation(); closeImageModalDirect()">✕</button>
+                    
                 </div>
                 <div class="image-wrapper">
                     <img id="viewerImage" src="" alt="勤務表">
@@ -123,9 +187,7 @@
             </div>
         </div>
 
-    </div>
-
-    <div id="optionModal" class="modal-overlay" onclick="closeModal(event)">
+    </div> <div id="optionModal" class="modal-overlay" onclick="closeModal(event)">
         <div class="modal-content">
             <div class="modal-title" id="modalDateTitle">日期</div>
             <div class="modal-subtitle">可複選</div>
@@ -148,6 +210,26 @@
             <div class="modal-footer">
                 <button class="btn-secondary" onclick="confirmModal(true)">清除設定</button>
                 <button class="btn-primary" onclick="confirmModal(false)">確定</button>
+            </div>
+        </div>
+    </div>
+
+    <div id="userListModal" class="modal-overlay" onclick="closeUserListModal(event)">
+        <div class="modal-content user-list-content">
+            <div class="modal-header" style="justify-content: space-between; padding-right: 15px;">
+                <div style="display: flex; align-items: center; gap: 10px;">
+                    <span id="userListTitle">同事列表</span>
+                    <button id="toggleBackupBtn" class="toggle-backup-btn" onclick="toggleBackupView()">
+                        ♻️ 資源回收桶
+                    </button>
+                </div>
+                
+                <button type="button" class="close-icon" style="position:static; transform:none; width:30px; height:30px; font-size:1.2rem;" onclick="event.stopPropagation(); closeUserListModalDirect()">✕</button>
+            </div>
+            <div class="user-list-wrapper">
+                <div id="userListContainer" class="user-list">
+                    <div class="loading-text">載入中...</div>
+                </div>
             </div>
         </div>
     </div>
