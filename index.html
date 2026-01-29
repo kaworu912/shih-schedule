@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>班表系統</title>
+    <title>多人排班系統</title>
     <link rel="stylesheet" href="style.css">
 </head>
 <body>
@@ -15,13 +15,11 @@
 
     <div id="authModal" class="auth-overlay">
         <div class="auth-box">
-            <h2 id="authTitle">歡迎使用班表系統</h2>
-            
+            <h2 id="authTitle">歡迎使用排班系統</h2>
             <div class="auth-tabs">
                 <button class="auth-tab active" onclick="switchAuthMode('login')">登入</button>
                 <button class="auth-tab" onclick="switchAuthMode('register')">註冊</button>
             </div>
-
             <div id="loginForm" class="auth-form">
                 <div class="form-group">
                     <label>暱稱 (帳號)</label>
@@ -33,7 +31,6 @@
                 </div>
                 <button class="auth-action-btn" onclick="doLogin()">登入</button>
             </div>
-
             <div id="registerForm" class="auth-form" style="display:none;">
                 <div class="form-group">
                     <label>設定暱稱 (帳號)</label>
@@ -56,7 +53,6 @@
                 </div>
                 <button class="auth-action-btn register-btn" onclick="doRegister()">註冊帳號</button>
             </div>
-            
             <p class="auth-footer">若是公共電腦請記得登出</p>
         </div>
     </div>
@@ -75,10 +71,12 @@
                     <span id="userInfoDisplay">未登入</span>
                     <span class="dropdown-arrow">▼</span>
                 </div>
-
                 <div id="userDropdown" class="user-dropdown">
                     <button class="menu-item" id="menuEditBtn" onclick="toggleEditMode()">
                         🔧 修改班表
+                    </button>
+                    <button class="menu-item" onclick="openLeaveSettings()">
+                        ⚙️ 休假設定
                     </button>
                     <button class="menu-item" onclick="openUserListModal()">
                         👀 觀看他人
@@ -103,7 +101,7 @@
         
         <div class="tab-group">
             <button class="tab-btn active" onclick="switchTab('calendar')">📅 班表預覽</button>
-            <button class="tab-btn" onclick="switchTab('stats')">📊 補休管理</button>
+            <button class="tab-btn" onclick="switchTab('stats')">📊 休假管理</button>
             <button class="tab-btn" onclick="switchTab('image')">📷 勤務表</button>
         </div>
 
@@ -112,60 +110,56 @@
         </div>
 
         <div id="view-stats" class="view-section">
-            <div class="stats-page-container compact-layout">
-                <h2 class="page-title" id="statsTitle">補休管理</h2>
+            <div class="stats-page-container">
                 
-                <div class="stats-row three-cols">
-                    <div class="input-card small-card">
-                        <label>本月預留</label>
-                        <input type="number" id="inputReserved" value="0" placeholder="0" 
-                               disabled
-                               oninput="calculateBalance()" 
-                               onfocus="if(this.value=='0') this.value=''" 
-                               onblur="if(this.value=='') this.value='0'">
+                <h3 style="margin: 0 0 10px 5px; color: #555;">
+                    <span id="statsYearDisplay">2026</span> 年度休假概況
+                </h3>
+
+                <div id="leaveCardsContainer" class="leave-grid">
                     </div>
-                    <div class="math-symbol-mini">-</div>
-                    <div class="input-card small-card readonly">
-                        <label>已使用</label>
-                        <input type="number" id="inputUsed" value="0" readonly>
-                    </div>
-                    <div class="math-symbol-mini">-</div>
-                    <div class="input-card small-card readonly">
-                        <label>未使用</label>
-                        <input type="number" id="inputUnused" value="0" readonly>
-                    </div>
-                </div>
-                
-                <div class="result-container">
-                    <div class="math-symbol-small">=</div>
-                    <div class="result-card light-theme">
-                        <label>本月剩餘</label>
-                        <span id="txtBalance" class="big-balance">0</span>
-                    </div>
-                </div>
+
             </div>
         </div>
 
         <div id="view-image" class="view-section">
             <div class="image-page-container">
+                
                 <div class="upload-card">
                     <h3 class="card-title">新增勤務表</h3>
-                    <div class="upload-row">
-                        <input type="date" id="rosterDateInput" class="date-input">
+                    
+                    <div class="upload-area-modern">
+                        <div class="date-picker-group">
+                            <span class="date-picker-label">📅 日期</span>
+                            <input type="date" id="rosterDateInput" class="modern-date-input">
+                        </div>
+
+                        <div class="image-drop-zone" id="dropZone" onclick="document.getElementById('rosterFileInput').click()">
+                            
+                            <input type="file" id="rosterFileInput" accept="image/*" style="display: none;" onchange="handleRosterPreview(event)">
+                            
+                            <div id="uploadPlaceholder" class="placeholder-content">
+                                <span class="upload-icon">📷</span>
+                                <span class="upload-hint">點擊選擇圖片</span>
+                                <span class="upload-sub-hint">或將圖片拖曳至此</span>
+                            </div>
+
+                            <div id="previewBox" class="preview-img-box">
+                                <img id="uploadPreviewImg" src="">
+                            </div>
+                            
+                            <div id="reselectTag" class="reselect-tag" style="display:none;">點擊更換</div>
+                        </div>
+
+                        <button class="upload-confirm-btn" onclick="saveRosterImage()">
+                            ⬆️ 確認上傳
+                        </button>
                     </div>
-                    <div class="upload-row">
-                        <label for="rosterFileInput" class="file-btn">📂 選擇圖片</label>
-                        <input type="file" id="rosterFileInput" accept="image/*" style="display: none;" onchange="handleRosterSelect(event)">
-                        <span id="fileNameDisplay" class="file-name">未選擇檔案</span>
-                    </div>
-                    <button class="upload-confirm-btn" onclick="saveRosterImage()">⬆️ 上傳並儲存</button>
                 </div>
-        
+
                 <div class="roster-list-area">
                     <h3 class="card-title">已上傳勤務表</h3>
-                    <div id="rosterListContainer" class="roster-grid">
-                        <div class="empty-hint">尚無資料</div>
-                    </div>
+                    <div id="rosterListContainer" class="roster-grid"></div>
                 </div>
             </div>
         </div>
@@ -174,9 +168,7 @@
             <div class="modal-content image-viewer-content">
                 <div class="modal-header">
                     <span id="viewerDateTitle">日期</span>
-                    
                     <button type="button" class="close-icon" onclick="event.stopPropagation(); closeImageModalDirect()">✕</button>
-                    
                 </div>
                 <div class="image-wrapper">
                     <img id="viewerImage" src="" alt="勤務表">
@@ -187,29 +179,73 @@
             </div>
         </div>
 
-    </div> <div id="optionModal" class="modal-overlay" onclick="closeModal(event)">
+    </div>
+
+    <div id="optionModal" class="modal-overlay" onclick="closeModal(event)">
+        <div class="modal-content option-modal-content">
+            <div class="modal-header-simple">
+                <h3 id="modalDateTitle">日期</h3>
+                <button type="button" class="close-btn-simple" onclick="closeModalDirect()">✕</button>
+            </div>
+            
+            <div id="modalStep1" class="modal-step">
+                <div class="category-grid">
+                    <button class="cat-btn work" onclick="goToStep2('work')">💼 上班/調整</button>
+                    <button class="cat-btn overtime" onclick="goToStep2('overtime')">🔥 加班</button>
+                    <button class="cat-btn comp" onclick="goToStep2('comp')">🌙 補休</button>
+                    <button class="cat-btn leave" onclick="goToStep2('leave')">🏖️ 請假</button>
+                </div>
+                <button class="btn-secondary full-width" onclick="confirmModal(true)">🗑️ 清除當日設定</button>
+            </div>
+
+            <div id="modalStep2" class="modal-step" style="display:none;">
+                <button class="back-link" onclick="backToStep1()">❮ 返回類別</button>
+                <h4 id="step2Title">選擇項目</h4>
+                
+                <div id="step2Options" class="options-grid">
+                    </div>
+
+                <div id="customHourArea" class="custom-hour-area" style="display:none;">
+                    <label>輸入時數 (小時):</label>
+                    <div class="hour-input-wrapper">
+                        <button onclick="adjustHour(-1)">-</button>
+                        <input type="number" id="customHourInput" value="1" min="1" max="24">
+                        <button onclick="adjustHour(1)">+</button>
+                    </div>
+                </div>
+
+                <button class="btn-primary full-width" onclick="saveOption()">確定</button>
+            </div>
+        </div>
+    </div>
+
+    <div id="leaveSettingsModal" class="modal-overlay" onclick="closeLeaveSettings(event)">
         <div class="modal-content">
-            <div class="modal-title" id="modalDateTitle">日期</div>
-            <div class="modal-subtitle">可複選</div>
-            <div class="modal-options scrollable">
-                <div class="opt-group-label">變更班別</div>
-                <button class="option-btn" onclick="toggleOption('work_day')">日勤 (8H+2H)</button>
-                <button class="option-btn" onclick="toggleOption('work_night')">夜勤 (8H+2H)</button>
-                <div class="opt-group-label">加班</div>
-                <button class="option-btn" onclick="toggleOption('add_day')">所內加日 (+8/+2)</button>
-                <button class="option-btn" onclick="toggleOption('add_night')">所內加夜 (+8/+2)</button>
-                <button class="option-btn" onclick="toggleOption('add_full')">所內加全 (+16/+4)</button>
-                <button class="option-btn" onclick="toggleOption('hosp_day')">醫加日 (+8/+2)</button>
-                <button class="option-btn" onclick="toggleOption('hosp_night')">醫加夜 (+8/+6)</button>
-                <button class="option-btn" onclick="toggleOption('hosp_full')">醫全日 (+24)</button>
-                <div class="opt-group-label">請假/補休</div>
-                <button class="option-btn" onclick="toggleOption('comp_leave')">補休 (扣16)</button>
-                <button class="option-btn" onclick="toggleOption('off_day')">日休 (扣9)</button>
-                <button class="option-btn" onclick="toggleOption('off_night')">夜休 (扣7)</button>
+            <div class="modal-header-simple">
+                <h3>⚙️ 年度休假設定</h3>
+                <button type="button" class="close-btn-simple" onclick="closeLeaveSettingsDirect()">✕</button>
+            </div>
+            <div class="settings-body">
+                <p class="hint-text">自行輸入整年度時數 (小時)</p>
+                <div class="form-group">
+                    <label>特休假</label>
+                    <input type="number" id="settingAnnual" placeholder="0">
+                </div>
+                <div class="form-group">
+                    <label>事假 - 預設32</label>
+                    <input type="number" id="settingPersonal" value="32">
+                </div>
+                <div class="form-group">
+                    <label>身心假 - 預設24</label>
+                    <input type="number" id="settingPsych" value="24">
+                </div>
+                <div class="form-group">
+                    <label>最低休假 - 預設24</label>
+                    <input type="number" id="settingMinLeave" value="24">
+                </div>
             </div>
             <div class="modal-footer">
-                <button class="btn-secondary" onclick="confirmModal(true)">清除設定</button>
-                <button class="btn-primary" onclick="confirmModal(false)">確定</button>
+                <button class="btn-primary full-width" onclick="saveLeaveSettings()">儲存設定</button>
             </div>
         </div>
     </div>
@@ -223,7 +259,6 @@
                         ♻️ 資源回收桶
                     </button>
                 </div>
-                
                 <button type="button" class="close-icon" style="position:static; transform:none; width:30px; height:30px; font-size:1.2rem;" onclick="event.stopPropagation(); closeUserListModalDirect()">✕</button>
             </div>
             <div class="user-list-wrapper">
