@@ -35,8 +35,24 @@ body { font-family: -apple-system, BlinkMacSystemFont, Roboto, sans-serif; backg
 .exit-view-btn { background: #856404; color: white; border: none; padding: 5px 12px; border-radius: 20px; font-size: 0.8rem; font-weight: bold; cursor: pointer; }
 
 /* 快速連結與頁籤 */
-.quick-links { display: flex; justify-content: center; margin-bottom: 10px; }
+.quick-links { 
+    display: flex; 
+    justify-content: center; 
+    margin-bottom: 10px; 
+    gap: 15px; /* 按鈕之間的距離 */
+}
+
 .month-btn.long-btn { width: auto; padding: 0 20px; background-color: #e3f2fd; color: #1565c0; border: 1px solid #bbdefb; border-radius: 10px; height: 36px; font-weight: bold; cursor: pointer; }
+
+/* ★★★ 新增：重新整理按鈕的專屬顏色 (低調的淺灰色) ★★★ */
+.month-btn.refresh-btn {
+    background-color: #f5f5f5;
+    color: #666;
+    border-color: #e0e0e0;
+}
+.month-btn.refresh-btn:active {
+    background-color: #e0e0e0;
+}
 .tab-group { display: flex; background: #e0e0e0; border-radius: 12px; padding: 4px; margin-bottom: 15px; }
 .tab-btn { flex: 1; border: none; background: transparent; padding: 10px; border-radius: 10px; font-size: 0.95rem; font-weight: 600; color: #666; cursor: pointer; transition: all 0.2s; }
 .tab-btn.active { background: white; color: var(--text-main); box-shadow: 0 2px 5px rgba(0,0,0,0.1); }
@@ -61,10 +77,34 @@ td.empty { background: none; border: none; cursor: default; }
 td.is-rest .shift-upper { color: #27ae60; }
 td.is-rest .shift-lower { color: #2ecc71; }
 
-/* 印章樣式 (新增 leave) */
-.stamp { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%) rotate(-15deg); border: 2px solid; border-radius: 6px; padding: 1px 4px; background-color: rgba(255, 255, 255, 0.95); font-size: 0.7rem; font-weight: 900; line-height: 1.1; white-space: nowrap; z-index: 10; pointer-events: none; }
-.stamp.type-add { color: var(--stamp-add-color); border-color: var(--stamp-add-border); }
-.stamp.type-off { color: var(--stamp-off-color); border-color: var(--stamp-off-border); }
+/* ★★★ 印章樣式 (支援多重標籤自動上下排列) ★★★ */
+.stamp-container {
+    position: absolute; 
+    top: 50%; 
+    left: 50%; 
+    transform: translate(-50%, -50%) rotate(-15deg);
+    display: flex;
+    flex-direction: column; /* 讓多個標籤垂直排列 */
+    gap: 2px; /* 標籤之間的微小間距 */
+    z-index: 10; 
+    pointer-events: none;
+    align-items: center;
+}
+
+.stamp { 
+    /* 移除了原本的 absolute，改由父層 container 控制位置 */
+    border: 2px solid; 
+    border-radius: 6px; 
+    padding: 1px 4px; 
+    background-color: rgba(255, 255, 255, 0.95); 
+    font-size: 0.7rem; 
+    font-weight: 900; 
+    line-height: 1.1; 
+    white-space: nowrap; 
+}
+
+.stamp.type-add { color: var(--stamp-add-color); border-color: var(--stamp-add-color); }
+.stamp.type-off { color: var(--stamp-off-color); border-color: var(--stamp-off-color); }
 .stamp.type-leave { color: var(--stamp-leave-color); border-color: var(--stamp-leave-color); }
 
 /* ★★★ 休假管理 (極簡橫條版) ★★★ */
@@ -166,6 +206,7 @@ td.is-rest .shift-lower { color: #2ecc71; }
 .cat-btn.overtime { background: #d84315; }
 .cat-btn.comp { background: #1565c0; }
 .cat-btn.leave { background: #7b1fa2; }
+.cat-btn.swap { background: #00897b; }
 
 .full-width { width: 100%; padding: 12px; border: none; border-radius: 8px; font-weight: bold; cursor: pointer; margin-top: 10px; }
 .btn-primary { background: #333; color: white; }
@@ -392,4 +433,47 @@ td.is-rest .shift-lower { color: #2ecc71; }
     border-radius: 20px;
     font-size: 0.8rem;
     pointer-events: none;
+}
+
+/* ★★★ Toast 提示通知 (取代 alert) ★★★ */
+.toast-container {
+    position: fixed;
+    bottom: 30px;
+    left: 50%;
+    transform: translateX(-50%);
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    z-index: 99999;
+    pointer-events: none;
+}
+
+.toast {
+    background: #333;
+    color: white;
+    padding: 12px 24px;
+    border-radius: 30px;
+    font-size: 0.95rem;
+    font-weight: bold;
+    box-shadow: 0 4px 15px rgba(0,0,0,0.2);
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    /* 動畫：出現 0.3 秒，停留 2.7 秒後淡出 */
+    animation: toastSlideUp 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.275) forwards, toastFadeOut 0.3s ease 2.7s forwards;
+    pointer-events: auto;
+}
+
+.toast.success { background: #2e7d32; }
+.toast.error { background: #c62828; }
+.toast.info { background: #1565c0; }
+
+@keyframes toastSlideUp {
+    from { opacity: 0; transform: translateY(30px) scale(0.9); }
+    to { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+@keyframes toastFadeOut {
+    from { opacity: 1; }
+    to { opacity: 0; transform: translateY(-10px); }
 }

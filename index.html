@@ -3,7 +3,17 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>多人排班系統</title>
+    <title>排班系統</title>
+    
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    
+    <meta name="apple-mobile-web-app-title" content="排班系統">
+    
+    <link rel="apple-touch-icon" href="icon.png">
+    
+    <link rel="manifest" href="manifest.json">
     <link rel="stylesheet" href="style.css">
 </head>
 <body>
@@ -34,7 +44,7 @@
             <div id="registerForm" class="auth-form" style="display:none;">
                 <div class="form-group">
                     <label>設定暱稱 (帳號)</label>
-                    <input type="text" id="regUser" placeholder="例如: Wang">
+                    <input type="text" id="regUser" placeholder="中英文皆可">
                 </div>
                 <div class="form-group">
                     <label>設定密碼</label>
@@ -75,6 +85,9 @@
                     <button class="menu-item" id="menuEditBtn" onclick="toggleEditMode()">
                         🔧 修改班表
                     </button>
+                    <button class="menu-item" onclick="openSetupModal()">
+                        🏛️ 班表初始設定
+                    </button>
                     <button class="menu-item" onclick="openLeaveSettings()">
                         ⚙️ 休假設定
                     </button>
@@ -96,6 +109,10 @@
         <div class="quick-links">
             <button class="month-btn long-btn" onclick="jumpToToday()">
                 📍 回到今天
+            </button>
+            
+            <button class="month-btn long-btn refresh-btn" onclick="location.reload()">
+                🔄 重新整理
             </button>
         </div>
         
@@ -194,6 +211,7 @@
                     <button class="cat-btn overtime" onclick="goToStep2('overtime')">🔥 加班</button>
                     <button class="cat-btn comp" onclick="goToStep2('comp')">🌙 補休</button>
                     <button class="cat-btn leave" onclick="goToStep2('leave')">🏖️ 請假</button>
+                    <button class="cat-btn swap" onclick="goToStep2('swap')" style="grid-column: 1 / -1;">🔄 換班</button>
                 </div>
                 <button class="btn-secondary full-width" onclick="confirmModal(true)">🗑️ 清除當日設定</button>
             </div>
@@ -205,14 +223,27 @@
                 <div id="step2Options" class="options-grid">
                     </div>
 
-                <div id="customHourArea" class="custom-hour-area" style="display:none;">
-                    <label>輸入時數 (小時):</label>
-                    <div class="hour-input-wrapper">
-                        <button onclick="adjustHour(-1)">-</button>
-                        <input type="number" id="customHourInput" value="1" min="1" max="24">
-                        <button onclick="adjustHour(1)">+</button>
+                    <div id="customHourArea" class="custom-hour-area" style="display:none;">
+                    
+                        <div class="input-row">
+                            <label id="customLabel1">輸入時數:</label>
+                            <div class="hour-input-wrapper">
+                                <button onclick="adjustHour('customHourInput', -1)">-</button>
+                                <input type="number" id="customHourInput" value="1" min="0" max="24">
+                                <button onclick="adjustHour('customHourInput', 1)">+</button>
+                            </div>
+                        </div>
+    
+                        <div id="standbyInputRow" class="input-row" style="display:none; margin-top:10px; border-top:1px dashed #ddd; padding-top:10px;">
+                            <label>備勤時數:</label>
+                            <div class="hour-input-wrapper">
+                                <button onclick="adjustHour('customStandbyInput', -1)">-</button>
+                                <input type="number" id="customStandbyInput" value="0" min="0" max="24">
+                                <button onclick="adjustHour('customStandbyInput', 1)">+</button>
+                            </div>
+                        </div>
+    
                     </div>
-                </div>
 
                 <button class="btn-primary full-width" onclick="saveOption()">確定</button>
             </div>
@@ -226,22 +257,26 @@
                 <button type="button" class="close-btn-simple" onclick="closeLeaveSettingsDirect()">✕</button>
             </div>
             <div class="settings-body">
-                <p class="hint-text">自行輸入整年度時數 (小時)</p>
+                <p class="hint-text">請輸入整年度的總時數 (小時)</p>
                 <div class="form-group">
-                    <label>特休假</label>
+                    <label>特休假 (Annual)</label>
                     <input type="number" id="settingAnnual" placeholder="0">
                 </div>
                 <div class="form-group">
-                    <label>事假 - 預設32</label>
+                    <label>事假 (Personal) - 預設32</label>
                     <input type="number" id="settingPersonal" value="32">
                 </div>
                 <div class="form-group">
-                    <label>身心假 - 預設24</label>
+                    <label>身心假 (Psych) - 預設24</label>
                     <input type="number" id="settingPsych" value="24">
                 </div>
                 <div class="form-group">
-                    <label>最低休假 - 預設24</label>
-                    <input type="number" id="settingMinLeave" value="24">
+                    <label>最低休假 (Min Leave)</label>
+                    <input type="number" id="settingMinLeave" placeholder="0">
+                </div>
+                <div class="form-group">
+                    <label>其他 (Other)</label>
+                    <input type="number" id="settingOther" placeholder="0">
                 </div>
             </div>
             <div class="modal-footer">
@@ -265,6 +300,52 @@
                 <div id="userListContainer" class="user-list">
                     <div class="loading-text">載入中...</div>
                 </div>
+            </div>
+        </div>
+    </div>
+
+    <script src="script.js"></script>
+
+<div id="toastContainer" class="toast-container"></div>
+
+    <div id="customConfirmModal" class="modal-overlay" style="z-index: 20000; display: none;">
+        <div class="modal-content" style="max-width: 300px; text-align: center; padding: 25px 20px;">
+            <h3 style="margin-top: 0; color: #333; font-size: 1.2rem;">請確認</h3>
+            <p id="confirmMessage" style="color: #666; margin-bottom: 20px; font-size: 0.95rem; white-space: pre-wrap; line-height: 1.5;"></p>
+            <div style="display: flex; gap: 10px; justify-content: center;">
+                <button id="confirmCancelBtn" class="btn-secondary" style="flex: 1; padding: 10px; border-radius: 8px;">取消</button>
+                <button id="confirmOkBtn" class="btn-primary" style="flex: 1; padding: 10px; border-radius: 8px; background: #d84315;">確定</button>
+            </div>
+        </div>
+    </div>
+
+    <div id="setupModal" class="modal-overlay" style="z-index: 10005;">
+        <div class="modal-content" style="max-width: 350px;">
+            <div class="modal-header-simple">
+                <h3>🏛️ 班表與單位設定</h3>
+                <button type="button" class="close-btn-simple" onclick="closeSetupModal()">✕</button>
+            </div>
+            <div class="settings-body">
+                <p class="hint-text">請設定您的單位與六日一輪的起始日，系統將為您量身打造專屬班表。</p>
+                <div class="form-group">
+                    <label>服務單位名稱</label>
+                    <input type="text" id="setupUnit" placeholder="例如: 花蓮監獄" style="width:100%; padding:8px; border-radius:6px; border:1px solid #ddd; background:#f9f9f9;">
+                </div>
+                
+                <div class="form-group">
+                    <label style="color: #d84315; font-weight: bold;">請選擇六日一輪中的「第一個上班日」</label>
+                    <input type="date" id="setupDate" class="modern-date-input" style="width:100%; border:1px solid #ddd; padding:8px; border-radius:6px; background:#f9f9f9; margin-top:5px;">
+                </div>
+                <div class="form-group">
+                    <label>該上班日您的班別為：</label>
+                    <select id="setupShiftType" style="width:100%; padding:8px; border-radius:6px; border:1px solid #ddd; background:#f9f9f9; margin-top:5px;">
+                        <option value="main">正班 (第一天正班、第三天副班)</option>
+                        <option value="sub">副班 (第一天副班、第三天正班)</option>
+                    </select>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button class="btn-primary full-width" onclick="submitSetup()">確認並生成班表</button>
             </div>
         </div>
     </div>

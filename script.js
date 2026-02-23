@@ -1,14 +1,12 @@
 // =========== 設定與常數區 ===========
 let READ_ONLY_MODE = true; 
+const API_URL = "https://script.google.com/macros/s/AKfycbyJb7S1ySBuCSNsTYSB9buBMAkqUIVW4rU2p8RBIfKBJzYdSSX7MZU3uUer_5Iaom8O1Q/exec"; 
 
-// ★★★ 請確認您的 Google Apps Script 網址是否正確 ★★★
-const API_URL = "https://script.google.com/macros/s/AKfycbwFP4cx-sNYfO8NrP55kK4PI6BeGMl7VylGThNt1AntGo9B-N-XDe1ZqTlusciXVMf-0Q/exec"; 
-
+// 舊帳號預設起算日 (向下相容)
 const ANCHOR_DATE = new Date(2025, 11, 14); 
 const BASE_YEAR = 2025;
 const BASE_MONTH = 11; 
 
-// 狀態變數
 let CURRENT_DISPLAY_GROUP = ''; 
 let CURRENT_USER = null; 
 let VIEWING_MODE_USER = null;
@@ -19,7 +17,6 @@ let userOverrides = {};
 const KEY_RESERVED_PREFIX = 'stats_reserved_'; 
 const KEY_LEAVE_CONFIG = 'config_leave_limits'; 
 
-// 班表循環設定
 const CYCLE_CONFIG = [
     { isWork: true,  text: '上班' }, { isWork: false, text: '休假' },  
     { isWork: true,  text: '上班' }, { isWork: false, text: '休假' },  
@@ -31,28 +28,106 @@ const WEEK_DAYS = ['一', '二', '三', '四', '五', '六', '日'];
 const SYSTEM_TODAY = new Date(); 
 const GROUP_OFFSETS = { '甲2': 0, '乙2': 1, '甲3': 2, '乙3': 3, '甲1': 4, '乙1': 5 };
 
-// 休假類別定義 (更新：事假32, 新增最低休假24)
 const LEAVE_TYPES = {
     'annual':    { label: '特休',    default: 0,  color: 'annual' },
-    'personal':  { label: '事假',    default: 32, color: 'personal' }, // 改為 32
+    'personal':  { label: '事假',    default: 32, color: 'personal' }, 
     'psych':     { label: '身心假',  default: 24, color: 'psych' },
-    'min_leave': { label: '最低休假', default: 24, color: 'min_leave' } // 新增
+    'min_leave': { label: '最低休假', default: 0, color: 'min_leave' },
+    'other':     { label: '其他',    default: 0,  color: 'min_leave' } 
 };
 
-// 排班規則定義
 const OVERRIDE_RULES = {
     'work_day':   { label: '日勤', wk: 8, sb: 2, type: 'base' },
     'work_night': { label: '夜勤', wk: 8, sb: 2, type: 'base' },
     'add_day':    { label: '所加日', wk: 8, sb: 2, type: 'add' }, 
     'add_night':  { label: '所加夜', wk: 8, sb: 2, type: 'add' },
-    'add_full':   { label: '所加全', wk: 16, sb: 4, type: 'add' }, 
+    'add_full':   { label: '所日夜', wk: 16, sb: 4, type: 'add' }, 
     'hosp_day':   { label: '醫加日', wk: 8, sb: 2, type: 'add' },  
     'hosp_night': { label: '醫加夜', wk: 8, sb: 6, type: 'add' },  
-    'hosp_full':  { label: '醫全日', wk: 24, sb: 0, type: 'add' }, 
-    'off_day':    { label: '日休', wk: -8, sb: -1, type: 'off' }, 
-    'off_night':  { label: '夜休', wk: -8, sb: -1, type: 'off' }, 
-    'comp_leave': { label: '補休', wk: -16, sb: -4, type: 'off' } // 兼容舊版
+    'hosp_dn':    { label: '醫日夜', wk: 16, sb: 8, type: 'add' },
+    'off_day':    { label: '日休', wk: -8, sb: -2, type: 'off' }, 
+    'off_night':  { label: '夜休', wk: -8, sb: -2, type: 'off' }, 
+    'comp_leave': { label: '補休', wk: -16, sb: -4, type: 'off' },
+    'swap_work':  { label: '換班(上)', wk: 16, sb: 4, type: 'base' }, 
+    'swap_off':   { label: '換班(休)', wk: 0, sb: 0, type: 'base' } 
 };
+
+// =========== UX 元件 (Toast 與 Confirm) ===========
+
+function showToast(message, type = 'info') {
+    const container = document.getElementById('toastContainer');
+    if (!container) return;
+    const toast = document.createElement('div');
+    toast.className = `toast ${type}`;
+    let icon = type === 'success' ? '✅' : type === 'error' ? '❌' : 'ℹ️';
+    toast.innerHTML = `<span style="font-size: 1.2rem;">${icon}</span> <span>${message}</span>`;
+    container.appendChild(toast);
+    setTimeout(() => { if (toast.parentNode) toast.parentNode.removeChild(toast); }, 3000);
+}
+
+function showConfirm(message) {
+    return new Promise((resolve) => {
+        const modal = document.getElementById('customConfirmModal');
+        const msgEl = document.getElementById('confirmMessage');
+        const btnOk = document.getElementById('confirmOkBtn');
+        const btnCancel = document.getElementById('confirmCancelBtn');
+        msgEl.innerText = message;
+        modal.style.display = 'flex';
+        const cleanup = () => { btnOk.onclick = null; btnCancel.onclick = null; modal.style.display = 'none'; };
+        btnOk.onclick = () => { cleanup(); resolve(true); };
+        btnCancel.onclick = () => { cleanup(); resolve(false); };
+    });
+}
+
+// =========== 班表初始設定 (動態生成引擎) ===========
+
+function openSetupModal() {
+    toggleUserMenu(); 
+    let unit = '';
+    if (userOverrides['config_setup']) {
+        try {
+            const config = JSON.parse(userOverrides['config_setup']);
+            unit = config.unit || '';
+        } catch(e) {}
+    }
+    document.getElementById('setupUnit').value = unit;
+    const dateInput = document.getElementById('setupDate');
+    if (!dateInput.value) {
+        const today = new Date();
+        dateInput.value = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`;
+    }
+    document.getElementById('setupModal').classList.add('show');
+}
+
+function closeSetupModal() {
+    document.getElementById('setupModal').classList.remove('show');
+}
+
+// =========== 班表初始設定 ===========
+function submitSetup() {
+    const unit = document.getElementById('setupUnit').value.trim();
+    const dateStr = document.getElementById('setupDate').value;
+    const shiftType = document.getElementById('setupShiftType').value; 
+    
+    if(!unit || !dateStr || !shiftType) { showToast("請填寫完整", "error"); return; }
+    
+    const selectedDate = new Date(dateStr);
+    selectedDate.setHours(0,0,0,0);
+    
+    // 儲存設定：只需要記錄起始日和當天的班別
+    const config = {
+        unit: unit,
+        anchorTime: selectedDate.getTime(),
+        shiftType: shiftType, // 'main' 或是 'sub'
+        isNewMainSubRule: true 
+    };
+    
+    userOverrides['config_setup'] = JSON.stringify(config);
+    saveToCloud();
+    closeSetupModal();
+    updateUserInfoUI();
+    showToast("班表初始設定完成！", "success");
+}
 
 // =========== 初始化與工具函式 ===========
 
@@ -65,30 +140,75 @@ function formatDateKey(date) { return `${date.getFullYear()}-${String(date.getMo
 
 function jumpToToday() {
     const now = new Date();
-    const index = calculateIndexFromDate(now);
-    currentMonthIndex = (index < 0) ? 0 : index;
+    currentMonthIndex = calculateIndexFromDate(now);
     refreshCurrentPage();
 }
 
 function changeMonth(step) { 
-    const nextIndex = currentMonthIndex + step; 
-    if (nextIndex >= 0) { 
-        currentMonthIndex = nextIndex; 
-        refreshCurrentPage(); 
-    } 
+    currentMonthIndex += step; 
+    refreshCurrentPage(); 
 }
 
+// =========== 核心：取得單日班表資訊 ===========
 function getDayInfo(date) {
-    if (date < new Date(2025, 11, 1)) return null;
-    const diffTime = date - ANCHOR_DATE; 
-    const diffDays = Math.floor(diffTime / (1000 * 60 * 60 * 24));
+    if (date < new Date(2020, 0, 1)) return null; 
+
+    let myGroup = CURRENT_DISPLAY_GROUP || '甲2';
+    
+    // ★★★ 模式 1：新版自訂起算日 (完全遵循做1休1、做1休3) ★★★
+    if (userOverrides['config_setup']) {
+        try {
+            const setup = JSON.parse(userOverrides['config_setup']);
+            if (setup.anchorTime && setup.isNewMainSubRule) {
+                const useAnchor = new Date(setup.anchorTime);
+                const d1 = Date.UTC(date.getFullYear(), date.getMonth(), date.getDate());
+                const d2 = Date.UTC(useAnchor.getFullYear(), useAnchor.getMonth(), useAnchor.getDate());
+                let diffDays = Math.floor((d1 - d2) / (1000 * 60 * 60 * 24));
+                
+                // 個人六日迴圈 (0=第一天, 2=第三天)
+                let personalIndex = diffDays % 6;
+                if (personalIndex < 0) personalIndex += 6;
+                
+                // 只要是第0天或第2天就是上班
+                let isWork = (personalIndex === 0 || personalIndex === 2);
+                
+                if (isWork) {
+                    let isFirstDayMain = (setup.shiftType === 'main');
+                    let currentRole = '';
+                    
+                    // 根據設定分配正副班
+                    if (personalIndex === 0) currentRole = isFirstDayMain ? 'main' : 'sub';
+                    if (personalIndex === 2) currentRole = isFirstDayMain ? 'sub' : 'main';
+                    
+                    // 自動推算全球班別代號 (如: 甲12)
+                    let prefix = myGroup.charAt(0) || '甲';
+                    let num = myGroup.replace(/[^0-9]/g, '');
+                    let shiftCode = '';
+                    
+                    if (num === '1') shiftCode = currentRole === 'main' ? prefix + '12' : prefix + '31';
+                    else if (num === '2') shiftCode = currentRole === 'main' ? prefix + '23' : prefix + '12';
+                    else if (num === '3') shiftCode = currentRole === 'main' ? prefix + '31' : prefix + '23';
+                    else shiftCode = myGroup; // 防呆
+                    
+                    // 回傳明確的 role，讓 UI 知道要加上 (正) 還是 (副)
+                    return { isWork: true, text: '上班', shiftCode: shiftCode, role: currentRole };
+                } else {
+                    return { isWork: false, text: '休假', shiftCode: '' };
+                }
+            }
+        } catch(e) {}
+    }
+    
+    // ★★★ 模式 2：舊版向下相容 (未設定過的帳號) ★★★
+    let useAnchor = ANCHOR_DATE;
+    const d1 = Date.UTC(date.getFullYear(), date.getMonth(), date.getDate());
+    const d2 = Date.UTC(useAnchor.getFullYear(), useAnchor.getMonth(), useAnchor.getDate());
+    const diffDays = Math.floor((d1 - d2) / (1000 * 60 * 60 * 24));
+    
     let globalIndex = diffDays % TOTAL_CYCLE_DAYS;
     if (globalIndex < 0) globalIndex += TOTAL_CYCLE_DAYS;
     
-    let userGroup = CURRENT_DISPLAY_GROUP || '甲2'; 
-    let offset = GROUP_OFFSETS[userGroup];
-    if (offset === undefined) offset = 0;
-    
+    let offset = GROUP_OFFSETS[myGroup] || 0;
     let personalIndex = (globalIndex - offset) % TOTAL_CYCLE_DAYS;
     if (personalIndex < 0) personalIndex += TOTAL_CYCLE_DAYS;
     
@@ -96,52 +216,46 @@ function getDayInfo(date) {
 }
 
 function calculateDayStats(dayInfo, overrideString) {
-    let normal = dayInfo.isWork ? 16 : 0; 
-    let overtime = 0; 
-    let standby = dayInfo.isWork ? 4 : 0;
-    let labels = [];
+    let base_normal = dayInfo.isWork ? 16 : 0; 
+    let base_standby = dayInfo.isWork ? 4 : 0;
+    let overtime = 0; let add_standby = 0; let labels = [];
 
-    if (!overrideString) return { normal, overtime, sb: standby, labels };
-
+    if (!overrideString) return { normal: base_normal, overtime: 0, sb: base_standby, labels };
     const items = overrideString.split(',');
     
-    // 先處理 Base
     items.forEach(item => {
         if (OVERRIDE_RULES[item] && OVERRIDE_RULES[item].type === 'base') {
-            normal = OVERRIDE_RULES[item].wk;
-            standby = OVERRIDE_RULES[item].sb;
+            base_normal = OVERRIDE_RULES[item].wk;
+            base_standby = OVERRIDE_RULES[item].sb;
             labels.push(OVERRIDE_RULES[item].label);
         }
     });
 
-    // 再處理 Add/Off/Complex
     items.forEach(item => {
         if (OVERRIDE_RULES[item] && OVERRIDE_RULES[item].type === 'base') return; 
-
         if (OVERRIDE_RULES[item]) {
             const r = OVERRIDE_RULES[item];
-            if (r.type === 'add') { overtime += r.wk; standby += r.sb; labels.push(r.label); }
-            else if (r.type === 'off') { normal += r.wk; standby += r.sb; labels.push(r.label); }
-        }
-        else if (item.includes('|')) {
-            const parts = item.split('|'); 
-            const type = parts[0];
-            const subtype = parts[1];
-            const hours = parseFloat(parts[2]) || 0;
-
-            if (type === 'leave') {
-                normal -= hours;
-                let labelText = LEAVE_TYPES[subtype] ? LEAVE_TYPES[subtype].label : subtype;
-                labels.push(`${labelText}${hours}h`);
-            } else if (type === 'comp') {
-                normal -= hours;
-                labels.push(`補休${hours}h`);
+            if (r.type === 'add') { overtime += r.wk; add_standby += r.sb; labels.push(r.label); }
+            else if (r.type === 'off') { base_normal += r.wk; base_standby += r.sb; labels.push(r.label); }
+        } else if (item.includes('|')) {
+            const parts = item.split('|'); const type = parts[0]; const subtype = parts[1]; const val1 = parseFloat(parts[2]) || 0; 
+            if (type === 'leave' || type === 'comp') {
+                base_normal -= val1; base_standby -= (val1 / 4); 
+                let lbl = type === 'comp' ? '補休' : (LEAVE_TYPES[subtype] ? LEAVE_TYPES[subtype].label : subtype);
+                labels.push(`${lbl}${val1}h`);
+            } else if (type === 'add' && subtype === 'custom') {
+                const val2 = parseFloat(parts[3]) || 0; 
+                overtime += val1; add_standby += val2;
+                labels.push(`自訂(+${val1}/${val2})`);
             }
         }
     });
 
-    if (normal < 0) normal = 0; if (overtime < 0) overtime = 0; if (standby < 0) standby = 0;
-    return { normal, overtime, sb: standby, labels };
+    if (base_normal <= 0) { base_normal = 0; base_standby = 0; }
+    if (base_standby < 0) base_standby = 0;
+    if (overtime < 0) overtime = 0; 
+    if (add_standby < 0) add_standby = 0;
+    return { normal: base_normal, overtime: overtime, sb: base_standby + add_standby, labels: labels };
 }
 
 // =========== 認證與登入邏輯 ===========
@@ -149,7 +263,6 @@ function calculateDayStats(dayInfo, overrideString) {
 function checkAuth() {
     const savedUser = localStorage.getItem('shifts_user');
     const savedGroup = localStorage.getItem('shifts_group');
-    
     if (savedUser && savedGroup) {
         CURRENT_USER = { username: savedUser, group: savedGroup };
         CURRENT_DISPLAY_GROUP = savedGroup; 
@@ -179,7 +292,7 @@ function switchAuthMode(mode) {
 async function doLogin() {
     const u = document.getElementById('loginUser').value.trim();
     const p = document.getElementById('loginPass').value.trim();
-    if(!u || !p) { alert("請輸入完整"); return; }
+    if(!u || !p) { showToast("請輸入完整資料", "error"); return; }
     
     const btn = document.querySelector('#loginForm button');
     const oldText = btn.innerText; btn.innerText = "登入中..."; btn.disabled = true;
@@ -187,22 +300,23 @@ async function doLogin() {
     try {
         const res = await fetch(`${API_URL}?action=login&username=${u}&password=${p}`);
         const json = await res.json();
-        
         if (json.result === 'success') {
             CURRENT_USER = json.user;
             localStorage.setItem('shifts_user', CURRENT_USER.username);
             localStorage.setItem('shifts_group', CURRENT_USER.group);
             CURRENT_DISPLAY_GROUP = CURRENT_USER.group;
-            
             userOverrides = json.data;
             document.getElementById('authModal').style.display = 'none';
-            updateUserInfoUI();
             jumpToToday();
             setAppMode(false);
-        } else {
-            alert("登入失敗：" + json.message);
-        }
-    } catch(e) { console.error(e); alert("網路錯誤"); } 
+            showToast(`歡迎回來，${CURRENT_USER.username}！`, "success");
+            
+            // 全新帳號自動跳出設定視窗
+            if (!userOverrides['config_setup'] && Object.keys(userOverrides).filter(k => k !== '_userGroup').length === 0) {
+                openSetupModal();
+            } else { updateUserInfoUI(); }
+        } else { showToast("登入失敗：" + json.message, "error"); }
+    } catch(e) { showToast("網路連線錯誤", "error"); } 
     finally { btn.innerText = oldText; btn.disabled = false; }
 }
 
@@ -210,25 +324,25 @@ async function doRegister() {
     const u = document.getElementById('regUser').value.trim();
     const p = document.getElementById('regPass').value.trim();
     const g = document.getElementById('regGroup').value;
-    if(!u || !p) { alert("請輸入完整"); return; }
+    if(!u || !p) { showToast("請填寫完整註冊資料", "error"); return; }
+    
     const btn = document.querySelector('#registerForm button');
     btn.innerText = "註冊中..."; btn.disabled = true;
     try {
         const res = await fetch(`${API_URL}?action=register&username=${u}&password=${p}&group=${g}`);
         const json = await res.json();
         if (json.result === 'success') {
-            alert("註冊成功！請使用新帳號登入。");
+            showToast("註冊成功！請使用新帳號登入", "success");
             switchAuthMode('login');
             document.getElementById('loginUser').value = u;
-        } else { alert("註冊失敗：" + json.message); }
-    } catch(e) { alert("網路錯誤"); } 
+        } else { showToast("註冊失敗：" + json.message, "error"); }
+    } catch(e) { showToast("網路連線錯誤", "error"); } 
     finally { btn.innerText = "註冊帳號"; btn.disabled = false; }
 }
 
-function doLogout() {
-    if(confirm("確定要登出嗎？")) {
-        localStorage.removeItem('shifts_user');
-        localStorage.removeItem('shifts_group');
+async function doLogout() {
+    if (await showConfirm("確定要登出排班系統嗎？")) {
+        localStorage.removeItem('shifts_user'); localStorage.removeItem('shifts_group');
         location.reload();
     }
 }
@@ -236,7 +350,14 @@ function doLogout() {
 function updateUserInfoUI() {
     const display = document.getElementById('userInfoDisplay');
     if(display && CURRENT_USER) {
-        display.innerText = `${CURRENT_USER.username} (${CURRENT_USER.group})`;
+        let unitName = '';
+        if (userOverrides['config_setup']) {
+            try {
+                const setup = JSON.parse(userOverrides['config_setup']);
+                if (setup.unit) unitName = setup.unit + ' - ';
+            } catch(e) {}
+        }
+        display.innerText = `${CURRENT_USER.username} (${unitName}${CURRENT_USER.group})`;
     }
 }
 
@@ -264,11 +385,9 @@ async function loadOverrides(targetUsername = null) {
         const data = await response.json();
         
         if (data.result === 'account_deleted') {
-            if (targetUsername) {
-                alert(`使用者 "${targetUsername}" 已不存在。`);
-                exitViewMode(); return;
-            } else {
-                alert("⚠️ 您的帳號已被刪除，請重新註冊！");
+            if (targetUsername) { showToast(`使用者 "${targetUsername}" 已不存在。`, "error"); exitViewMode(); return; } 
+            else {
+                await showConfirm("⚠️ 您的帳號已被刪除，請重新註冊！\n\n(點擊確定後返回登入頁面)");
                 localStorage.removeItem('shifts_user'); localStorage.removeItem('shifts_group');
                 location.reload(); return;
             }
@@ -287,8 +406,7 @@ async function loadOverrides(targetUsername = null) {
             VIEWING_MODE_USER = targetUsername;
             document.getElementById('viewingOtherAlert').style.display = 'flex';
             document.getElementById('viewingTargetName').innerText = targetUsername;
-            READ_ONLY_MODE = true;
-            document.getElementById('menuEditBtn').style.display = 'none';
+            READ_ONLY_MODE = true; document.getElementById('menuEditBtn').style.display = 'none';
         } else {
             VIEWING_MODE_USER = null;
             document.getElementById('viewingOtherAlert').style.display = 'none';
@@ -296,6 +414,11 @@ async function loadOverrides(targetUsername = null) {
         }
         refreshCurrentPage();
         setAppMode(false);
+        updateUserInfoUI();
+
+        if (!targetUsername && !userOverrides['config_setup'] && Object.keys(userOverrides).filter(k => k !== '_userGroup').length === 0) {
+            openSetupModal();
+        }
     } catch (e) { console.error("Load Error:", e); } 
     finally { if(loader) loader.classList.remove('show'); }
 }
@@ -303,7 +426,7 @@ async function loadOverrides(targetUsername = null) {
 async function saveToCloud() {
     if (!CURRENT_USER) return;
     let targetUsername = VIEWING_MODE_USER || CURRENT_USER.username;
-    if (VIEWING_MODE_USER && CURRENT_USER.username !== 'SHIH') { alert("觀看模式下無法修改！"); return; }
+    if (VIEWING_MODE_USER && CURRENT_USER.username !== 'SHIH') { showToast("觀看模式下無法修改！", "error"); return; }
     
     const menuBtn = document.getElementById('menuEditBtn');
     if(menuBtn) { menuBtn.innerText = "⏳ 儲存中..."; menuBtn.disabled = true; }
@@ -317,18 +440,16 @@ async function saveToCloud() {
     
     try {
         await fetch(`${API_URL}?action=save&username=${targetUsername}`, {
-            method: 'POST', mode: 'no-cors', 
-            headers: { 'Content-Type': 'application/json' },
+            method: 'POST', mode: 'no-cors', headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(userOverrides)
         });
-        alert("✅ 資料已同步更新！");
-    } catch (e) { console.error(e); alert("❌ 上傳失敗"); } 
+        showToast("資料已同步更新！", "success");
+    } catch (e) { showToast("資料上傳失敗", "error"); } 
     finally { 
         const loader = document.getElementById('loadingOverlay');
         if(loader) loader.classList.remove('show');
         if(menuBtn) { menuBtn.disabled = false; menuBtn.style.display = VIEWING_MODE_USER ? 'none' : 'block'; menuBtn.innerText = "🔧 修改班表"; }
-        setAppMode(false); 
-        refreshCurrentPage(); 
+        setAppMode(false); refreshCurrentPage(); 
     }
 }
 
@@ -337,8 +458,7 @@ async function saveToCloud() {
 function refreshCurrentPage() {
     const currentData = getMonthData(currentMonthIndex);
     document.getElementById('currentMonthDisplay').innerText = currentData.label;
-    document.getElementById('prevBtn').disabled = (currentMonthIndex <= 0);
-    document.getElementById('nextBtn').disabled = false;
+    document.getElementById('prevBtn').disabled = false;
     
     if (document.getElementById('view-calendar').classList.contains('active')) renderCalendar(); 
     if (document.getElementById('view-stats').classList.contains('active')) calculateLeaveStats();
@@ -352,6 +472,7 @@ function renderCalendar() {
     container.appendChild(table);
 }
 
+// =========== 日曆生成 ===========
 function createCalendarHTML(year, month) {
     const monthContainer = document.createElement('div'); monthContainer.className = 'month-block'; 
     const table = document.createElement('table'); table.className = 'calendar';
@@ -362,7 +483,8 @@ function createCalendarHTML(year, month) {
     let startDay = 1; if (year === 2025 && month === 11) startDay = 17;
     const firstDay = new Date(year, month, startDay); const lastDay = new Date(year, month + 1, 0); 
     let currentDate = startDay; 
-    let statsRealized = { days: 0, normal: 0, overtime: 0, standby: 0 }; let statsFuture = { days: 0, normal: 0, overtime: 0, standby: 0 };
+    let statsRealized = { days: 0, normal: 0, overtime: 0, standby: 0 }; 
+    let statsFuture = { days: 0, normal: 0, overtime: 0, standby: 0 };
     const todayZero = new Date(SYSTEM_TODAY); todayZero.setHours(0,0,0,0);
     let standardDay = firstDay.getDay(); let dayOfWeek = (standardDay + 6) % 7; 
     let row = document.createElement('tr');
@@ -382,22 +504,39 @@ function createCalendarHTML(year, month) {
             if (stats.normal > 0 || stats.overtime > 0) targetStats.days++;
             targetStats.normal += stats.normal; targetStats.overtime += stats.overtime; targetStats.standby += stats.sb;
             
-            let isWork = (stats.normal > 0); td.className = isWork ? 'is-work' : 'is-rest'; 
+            let isWork = (stats.normal > 0 || stats.overtime > 0); 
+            td.className = isWork ? 'is-work' : 'is-rest'; 
             
+            // ★★★ 修改：用 stamp-container 把所有的標籤包起來 ★★★
             let stampHtml = '';
-            stats.labels.forEach(lbl => {
-                let type = 'type-off';
-                if (lbl.includes('加') || lbl.includes('勤')) type = 'type-add';
-                if (lbl.includes('假') || lbl.includes('休')) type = 'type-leave';
-                stampHtml += `<div class="stamp ${type}">${lbl}</div>`;
-            });
+            if (stats.labels && stats.labels.length > 0) {
+                stampHtml += '<div class="stamp-container">';
+                stats.labels.forEach(lbl => {
+                    let type = 'type-off';
+                    if (lbl.includes('加') || lbl.includes('勤') || lbl.includes('自訂')) type = 'type-add';
+                    if (lbl.includes('假') || lbl.includes('休') || lbl.includes('換')) type = 'type-leave';
+                    stampHtml += `<div class="stamp ${type}">${lbl}</div>`;
+                });
+                stampHtml += '</div>';
+            }
 
             let displayShift = dayInfo.shiftCode;
-            if (dayInfo.isWork) {
-                const myGroupNum = CURRENT_DISPLAY_GROUP.replace(/[^0-9]/g, '');
-                const subNum = displayShift.charAt(1); const mainNum = displayShift.charAt(2);
-                if (myGroupNum === mainNum) displayShift += '(正)'; else if (myGroupNum === subNum) displayShift += '(副)';
+            if (dayInfo.isWork && displayShift) {
+                // ★★★ 標記正副班的新舊相容邏輯 ★★★
+                if (dayInfo.role) {
+                    // 新版：直接吃 getDayInfo 給予的 role
+                    if (dayInfo.role === 'main') displayShift += '(正)';
+                    else if (dayInfo.role === 'sub') displayShift += '(副)';
+                } else {
+                    // 舊版：原本寫死的擷取邏輯
+                    const myGroupNum = CURRENT_DISPLAY_GROUP.replace(/[^0-9]/g, '');
+                    const mainNum = displayShift.charAt(2);
+                    const subNum  = displayShift.charAt(1);
+                    if (myGroupNum === mainNum) displayShift += '(正)'; 
+                    else if (myGroupNum === subNum) displayShift += '(副)';
+                }
             }
+            
             let line1 = displayShift.split('(')[0]; let line2 = displayShift.includes('(') ? '('+displayShift.split('(')[1] : '';
             
             td.innerHTML = `${stampHtml}<div class="cell-content"><span class="date-num ${isToday?'is-today':''}">${currentDate}</span><div class="shift-group"><span class="shift-upper">${line1}</span><span class="shift-lower">${line2}</span></div></div>`;
@@ -407,52 +546,52 @@ function createCalendarHTML(year, month) {
     while (dayOfWeek <= 6) { row.appendChild(document.createElement('td')); dayOfWeek++; }
     tbody.appendChild(row); table.appendChild(tbody);
     
+    let statsTotal = {
+        days: statsRealized.days + statsFuture.days,
+        normal: statsRealized.normal + statsFuture.normal,
+        overtime: statsRealized.overtime + statsFuture.overtime,
+        standby: statsRealized.standby + statsFuture.standby
+    };
+
     const statsDiv = document.createElement('div'); statsDiv.className = 'month-stats';
-    let statsHtml = '';
     const generateRowHtml = (title, data, colorTitle = '#666') => `
         <div class="stat-group-title" style="color:${colorTitle}; margin-top:10px;">${title}</div>
         <div class="stats-grid" style="grid-template-columns: repeat(4, 1fr);">
-            <div class="stat-card"><span class="stat-label">上班天</span><span class="stat-value">${data.days}</span></div>
-            <div class="stat-card"><span class="stat-label">正班時</span><span class="stat-value highlight">${data.normal}</span></div>
+            <div class="stat-card"><span class="stat-label">上班日</span><span class="stat-value">${data.days}</span></div>
+            <div class="stat-card"><span class="stat-label">上班時</span><span class="stat-value highlight">${data.normal}</span></div>
             <div class="stat-card"><span class="stat-label">加班時</span><span class="stat-value overtime">${data.overtime}</span></div>
             <div class="stat-card"><span class="stat-label">備勤時</span><span class="stat-value" style="color:#666">${data.standby}</span></div>
         </div>`;
-    statsHtml += generateRowHtml('本月統計 (參考)', statsRealized);
-    statsDiv.innerHTML = statsHtml; monthContainer.appendChild(table); monthContainer.appendChild(statsDiv); 
+        
+    let statsHtml = generateRowHtml('結算至今日 (已發生)', statsRealized, '#d84315'); 
+    statsHtml += generateRowHtml('全月總統計 (預估)', statsTotal, '#1565c0');  
+    
+    statsDiv.innerHTML = statsHtml; 
+    monthContainer.appendChild(table); monthContainer.appendChild(statsDiv); 
     return monthContainer;
 }
 
 // =========== 休假管理 (儀表板) ===========
 
-// ★★★ 休假管理邏輯 (極簡橫條版) ★★★
 function calculateLeaveStats() {
-    // 1. 取得當前年份與月份
     const currentData = getMonthData(currentMonthIndex);
     const viewYear = currentData.year; 
     const viewMonth = currentData.month + 1; 
 
-    // 更新標題年份
     const yearTitle = document.getElementById('statsYearDisplay');
     if (yearTitle) yearTitle.innerText = viewYear;
 
-    // 2. 讀取設定值
     let limits = {};
     if (userOverrides[KEY_LEAVE_CONFIG]) {
         try { limits = JSON.parse(userOverrides[KEY_LEAVE_CONFIG]); } catch(e){}
     }
     
-    // 3. 初始化統計數據
     let usage = {}; 
-    // 確保所有假別 (含新增的 min_leave) 都有初始值
     Object.keys(LEAVE_TYPES).forEach(k => usage[k] = 0);
-    
     let compStats = { used: 0 };
 
-    // 4. 遍歷資料進行計算
     Object.keys(userOverrides).forEach(key => {
-        // 過濾非日期的 key
         if (!key.match(/^\d{4}-\d{2}-\d{2}$/)) return;
-
         const dateParts = key.split('-');
         const dataYear = parseInt(dateParts[0]);
         const dataMonth = parseInt(dateParts[1]);
@@ -460,22 +599,16 @@ function calculateLeaveStats() {
         const items = val.split(',');
 
         items.forEach(item => {
-            // 解析複合標籤 (type|subtype|hours)
             if (item.includes('|')) {
                 const [type, subtype, hoursStr] = item.split('|');
                 const hours = parseFloat(hoursStr) || 0;
-
-                // A. 年度假別 (特休/事假/身心/最低) -> 只要年份對就累計
                 if (type === 'leave' && dataYear === viewYear) {
                     if (usage[subtype] !== undefined) usage[subtype] += hours;
                 }
-                
-                // B. 補休 (月結) -> 年份跟月份都要對
                 if (type === 'comp' && dataYear === viewYear && dataMonth === viewMonth) {
                     compStats.used += hours; 
                 }
             } else {
-                // C. 舊版補休標籤 (相容性)
                 if (item === 'comp_leave' && dataYear === viewYear && dataMonth === viewMonth) {
                     compStats.used += 16; 
                 }
@@ -483,18 +616,13 @@ function calculateLeaveStats() {
         });
     });
 
-    // 5. 開始渲染
     const container = document.getElementById('leaveCardsContainer');
     container.innerHTML = '';
 
-    // --- 渲染【補休卡片】(極簡版：含輸入框) ---
-    // 取得預留值 (key 使用 year_monthIndex)
     const reservedKey = `${KEY_RESERVED_PREFIX}${viewYear}_${currentData.month}`;
     const reserved = parseFloat(userOverrides[reservedKey]) || 0;
-    
-    // 計算剩餘 (預留 - 已用)
     const compBalance = reserved - compStats.used;
-    const balanceColor = compBalance >= 0 ? '#1976d2' : '#c62828'; // 藍色或紅色
+    const balanceColor = compBalance >= 0 ? '#1976d2' : '#c62828'; 
 
     const compCard = document.createElement('div');
     compCard.className = 'leave-card comp-card';
@@ -504,31 +632,22 @@ function calculateLeaveStats() {
         </div>
         <div class="l-body">
             <div class="l-item">
-                預留 <input type="number" id="inputReserved" value="${reserved}" 
-                       class="mini-input"
-                       ${READ_ONLY_MODE ? 'disabled' : ''}
-                       oninput="updateCompBalanceLocal()">
+                預留 <input type="number" id="inputReserved" value="${reserved}" class="mini-input"
+                       ${READ_ONLY_MODE ? 'disabled' : ''} oninput="updateCompBalanceLocal()">
             </div>
-            <div class="l-item">
-                已用 <span class="l-val">${compStats.used}</span>
-            </div>
-            <div class="l-item">
-                剩餘 <span id="dynamicCompBalance" class="l-val balance" style="color:${balanceColor}">${compBalance}</span>
-            </div>
+            <div class="l-item">已用 <span class="l-val">${compStats.used}</span></div>
+            <div class="l-item">剩餘 <span id="dynamicCompBalance" class="l-val balance" style="color:${balanceColor}">${compBalance}</span></div>
         </div>
     `;
     container.appendChild(compCard);
 
-    // --- 渲染【其他假別卡片】(極簡版：純顯示) ---
     Object.keys(LEAVE_TYPES).forEach(typeKey => {
         const conf = LEAVE_TYPES[typeKey];
-        // 取得額度 (優先讀取設定，否則用預設值)
         const limit = (limits[typeKey] !== undefined) ? limits[typeKey] : conf.default;
         const used = usage[typeKey];
         const remaining = limit - used;
-        const remainColor = remaining >= 0 ? '#333' : '#c62828'; // 正常黑字，超用紅字
+        const remainColor = remaining >= 0 ? '#333' : '#c62828'; 
 
-        // 根據類型決定圖示
         let icon = '📄';
         if(typeKey === 'annual') icon = '🏖️';
         if(typeKey === 'personal') icon = '💼';
@@ -538,52 +657,30 @@ function calculateLeaveStats() {
         const card = document.createElement('div');
         card.className = `leave-card ${conf.color}`;
         card.innerHTML = `
-            <div class="l-header">
-                <span>${icon}</span> ${conf.label}
-            </div>
+            <div class="l-header"><span>${icon}</span> ${conf.label}</div>
             <div class="l-body">
-                <div class="l-item">
-                    額度 <span class="l-val">${limit}</span>
-                </div>
-                <div class="l-item">
-                    已用 <span class="l-val">${used}</span>
-                </div>
-                <div class="l-item">
-                    剩餘 <span class="l-val balance" style="color:${remainColor}">${remaining}</span>
-                </div>
+                <div class="l-item">額度 <span class="l-val">${limit}</span></div>
+                <div class="l-item">已用 <span class="l-val">${used}</span></div>
+                <div class="l-item">剩餘 <span class="l-val balance" style="color:${remainColor}">${remaining}</span></div>
             </div>
         `;
         container.appendChild(card);
     });
-
-    // 將本月補休統計存入全域變數，供 input 輸入時即時更新前端顯示
     window.currentCompStats = compStats; 
 }
 
-// 輔助函式：即時計算補休餘額
 function updateCompBalanceLocal() {
     const input = document.getElementById('inputReserved');
     const display = document.getElementById('dynamicCompBalance');
     if(input && display && window.currentCompStats) {
         const r = parseFloat(input.value) || 0;
-        // 公式：輸入值 - 已用
         const balance = r - window.currentCompStats.used;
         display.innerText = balance;
         display.style.color = balance >= 0 ? '#1976d2' : '#c62828';
     }
 }
 
-// 輔助函式：當使用者輸入預留時數時，即時更新顯示的餘額
-function updateCompBalanceLocal() {
-    const input = document.getElementById('inputReserved');
-    const display = document.getElementById('dynamicCompBalance');
-    if(input && display && window.currentCompStats) {
-        const r = parseFloat(input.value) || 0;
-        const balance = r + window.currentCompStats.added - window.currentCompStats.used;
-        display.innerText = balance;
-        display.style.color = balance >= 0 ? '#1976d2' : '#c62828';
-    }
-}
+// =========== 班表修改 Modal (三階段) ===========
 
 function openModal(date) {
     if (READ_ONLY_MODE) return;
@@ -601,10 +698,10 @@ function goToStep2(category) {
     const container = document.getElementById('step2Options');
     container.innerHTML = '';
     document.getElementById('customHourArea').style.display = 'none';
-    document.getElementById('step2Title').innerText = category === 'work' ? '上班設定' : category === 'overtime' ? '選擇加班' : category === 'comp' ? '選擇補休' : '選擇假別';
+    document.getElementById('step2Title').innerText = category === 'work' ? '上班設定' : category === 'overtime' ? '選擇加班' : category === 'comp' ? '選擇補休' : category === 'swap' ? '換班設定' : '選擇假別';
 
     if (category === 'work') {
-        renderOptionBtn('正常上班 (清除設定)', 'base', 'work_day');
+        renderOptionBtn('正常上班 (清除)', 'base', 'work_day');
         renderOptionBtn('日勤', 'base', 'work_day');
         renderOptionBtn('夜勤', 'base', 'work_night');
         renderOptionBtn('日休', 'base', 'off_day');
@@ -612,14 +709,19 @@ function goToStep2(category) {
     } else if (category === 'overtime') {
         renderOptionBtn('所加日 (+8)', 'add', 'add_day');
         renderOptionBtn('所加夜 (+8)', 'add', 'add_night');
-        renderOptionBtn('所加全 (+16)', 'add', 'add_full');
+        renderOptionBtn('所日夜 (+16)', 'add', 'add_full');
         renderOptionBtn('醫加日 (+8)', 'add', 'hosp_day');
         renderOptionBtn('醫加夜 (+8)', 'add', 'hosp_night');
+        renderOptionBtn('醫日夜 (+16)', 'add', 'hosp_dn');
+        renderOptionBtn('自訂 (加班/備勤)', 'add_custom', 'custom');
     } else if (category === 'comp') {
         renderOptionBtn('補休全日 (-16)', 'comp_std', 'comp_leave');
         renderOptionBtn('自訂時數', 'comp_custom', 'custom');
     } else if (category === 'leave') {
         Object.keys(LEAVE_TYPES).forEach(k => { renderOptionBtn(LEAVE_TYPES[k].label, 'leave', k); });
+    } else if (category === 'swap') {
+        renderOptionBtn('換班 (我上班)', 'base', 'swap_work');
+        renderOptionBtn('換班 (我休假)', 'base', 'swap_off');
     }
 }
 
@@ -635,15 +737,32 @@ function selectOption(btn, type, value) {
     document.querySelectorAll('.opt-btn').forEach(b => b.classList.remove('selected'));
     btn.classList.add('selected');
     selectedOptionValue = value;
+    
     const customArea = document.getElementById('customHourArea');
-    customArea.style.display = (type === 'leave' || value === 'custom') ? 'block' : 'none';
+    const label1 = document.getElementById('customLabel1');
+    const standbyRow = document.getElementById('standbyInputRow');
+    
+    customArea.style.display = 'none';
+    standbyRow.style.display = 'none';
+    
+    if (type === 'add_custom') {
+        customArea.style.display = 'block';
+        label1.innerText = "加班時數:";
+        standbyRow.style.display = 'block'; 
+        document.getElementById('customHourInput').value = 4; 
+        document.getElementById('customStandbyInput').value = 0;
+    } else if (type === 'leave' || value === 'custom') {
+        customArea.style.display = 'block';
+        label1.innerText = "輸入時數:"; 
+        document.getElementById('customHourInput').value = 4; 
+    }
 }
 
-function adjustHour(delta) {
-    const input = document.getElementById('customHourInput');
-    let val = parseInt(input.value) || 0;
+function adjustHour(inputId, delta) {
+    const input = document.getElementById(inputId);
+    let val = parseFloat(input.value) || 0;
     val += delta;
-    if (val < 1) val = 1; if (val > 24) val = 24;
+    if (val < 0) val = 0; if (val > 24) val = 24;
     input.value = val;
 }
 
@@ -653,18 +772,29 @@ function backToStep1() {
 }
 
 function saveOption() {
-    if (!selectedOptionValue) { alert('請選擇一個項目'); return; }
+    if (!selectedOptionValue) { showToast("請選擇一個項目", "error"); return; }
     let finalValue = selectedOptionValue;
     const customArea = document.getElementById('customHourArea');
+    
     if (customArea.style.display !== 'none') {
-        const hours = document.getElementById('customHourInput').value;
-        if (modalStep1Selection === 'comp') finalValue = `comp|custom|${hours}`;
-        else if (modalStep1Selection === 'leave') finalValue = `leave|${selectedOptionValue}|${hours}`;
+        const val1 = document.getElementById('customHourInput').value;
+        if (modalStep1Selection === 'comp') {
+            finalValue = `comp|custom|${val1}`;
+        } else if (modalStep1Selection === 'leave') {
+            finalValue = `leave|${selectedOptionValue}|${val1}`;
+        } else if (modalStep1Selection === 'overtime' && selectedOptionValue === 'custom') {
+            const val2 = document.getElementById('customStandbyInput').value;
+            finalValue = `add|custom|${val1}|${val2}`;
+        }
     }
     
     let currentVal = userOverrides[modalCurrentDateKey] || '';
-    if (modalStep1Selection === 'work') userOverrides[modalCurrentDateKey] = finalValue;
-    else { if (currentVal) finalValue = currentVal + ',' + finalValue; userOverrides[modalCurrentDateKey] = finalValue; }
+    if (modalStep1Selection === 'work' || modalStep1Selection === 'swap') {
+        userOverrides[modalCurrentDateKey] = finalValue;
+    } else { 
+        if (currentVal) finalValue = currentVal + ',' + finalValue; 
+        userOverrides[modalCurrentDateKey] = finalValue; 
+    }
     
     closeModalDirect();
     refreshCurrentPage();
@@ -678,42 +808,50 @@ function confirmModal(isClear) {
 function closeModalDirect() { document.getElementById('optionModal').classList.remove('show'); }
 function closeModal(event) { if (event.target.id === 'optionModal') closeModalDirect(); }
 
-// 休假設定：開啟
+// =========== 休假設定 ===========
 function openLeaveSettings() {
     toggleUserMenu();
     let limits = {};
     if (userOverrides[KEY_LEAVE_CONFIG]) { try { limits = JSON.parse(userOverrides[KEY_LEAVE_CONFIG]); } catch(e){} }
     
     document.getElementById('settingAnnual').value = limits['annual'] || '';
-    // 使用新的預設值
     document.getElementById('settingPersonal').value = limits['personal'] !== undefined ? limits['personal'] : 32;
     document.getElementById('settingPsych').value = limits['psych'] !== undefined ? limits['psych'] : 24;
-    document.getElementById('settingMinLeave').value = limits['min_leave'] !== undefined ? limits['min_leave'] : 24;
+    
+    // ★★★ 修改：移除預設 24，改為空值或使用者設定值 ★★★
+    document.getElementById('settingMinLeave').value = limits['min_leave'] || '';
+    
+    // ★★★ 新增：讀取其他假別設定 ★★★
+    document.getElementById('settingOther').value = limits['other'] || '';
     
     document.getElementById('leaveSettingsModal').classList.add('show');
 }
 
-// 休假設定：儲存
 function saveLeaveSettings() {
     const limits = {
         'annual': parseFloat(document.getElementById('settingAnnual').value) || 0,
         'personal': parseFloat(document.getElementById('settingPersonal').value) || 0,
         'psych': parseFloat(document.getElementById('settingPsych').value) || 0,
-        'min_leave': parseFloat(document.getElementById('settingMinLeave').value) || 0
+        'min_leave': parseFloat(document.getElementById('settingMinLeave').value) || 0,
+        
+        // ★★★ 新增：儲存其他假別 ★★★
+        'other': parseFloat(document.getElementById('settingOther').value) || 0
     };
     userOverrides[KEY_LEAVE_CONFIG] = JSON.stringify(limits);
     
     if (!document.body.classList.contains('editing-mode')) saveToCloud();
-    else alert("設定已暫存，請記得點擊「儲存並離開」");
+    else showToast("設定已暫存，請記得點擊「儲存並離開」", "info");
     
     closeLeaveSettingsDirect();
+    
+    // 儲存後自動重整儀表板
     if (document.getElementById('view-stats').classList.contains('active')) calculateLeaveStats();
 }
 
 function closeLeaveSettingsDirect() { document.getElementById('leaveSettingsModal').classList.remove('show'); }
 function closeLeaveSettings(e) { if(e.target.id === 'leaveSettingsModal') closeLeaveSettingsDirect(); }
 
-// 3. 人員列表與備份
+// =========== 觀看他人 & 備份功能 ===========
 async function openUserListModal() {
     toggleUserMenu(); 
     IS_SHOWING_BACKUPS = false;
@@ -792,51 +930,45 @@ function renderBackupList(files) {
 }
 
 async function deleteUserAccount(targetUser) {
-    if (!confirm(`⚠️ 警告！\n確定要刪除 "${targetUser}" 的帳號嗎？\n此動作將自動備份資料到雲端。`)) return;
+    if (!(await showConfirm(`⚠️ 警告！\n確定要刪除 "${targetUser}" 的帳號嗎？\n此動作將自動備份資料到雲端。`))) return;
     const loader = document.getElementById('loadingOverlay');
     if(loader) loader.classList.add('show');
     try {
         const res = await fetch(`${API_URL}?action=delete_user&admin_user=${CURRENT_USER.username}&target_user=${targetUser}`, { method: 'POST' });
         const json = await res.json();
-        if (json.result === 'success') { alert(`已成功刪除 ${targetUser}`); openUserListModal(); }
-        else alert("刪除失敗：" + json.message);
-    } catch(e) { alert("刪除發生錯誤"); } finally { if(loader) loader.classList.remove('show'); }
+        if (json.result === 'success') { showToast(`已成功刪除 ${targetUser}`, "success"); openUserListModal(); }
+        else showToast("刪除失敗：" + json.message, "error");
+    } catch(e) { showToast("刪除發生錯誤", "error"); } finally { if(loader) loader.classList.remove('show'); }
 }
 
 async function restoreUserAccount(fileId, name) {
-    if (!confirm(`確定要復原 "${name}" 的帳號嗎？`)) return;
+    if (!(await showConfirm(`確定要復原 "${name}" 的帳號嗎？`))) return;
     const container = document.getElementById('userListContainer');
     container.innerHTML = '<div class="loading-text">正在復原資料...</div>';
     try {
         const res = await fetch(`${API_URL}?action=restore_user&file_id=${fileId}`, { method: 'POST' });
         const json = await res.json();
-        if (json.result === 'success') { alert(`✅ 成功復原 "${json.username}"！`); IS_SHOWING_BACKUPS = false; toggleBackupView(); }
-        else { alert("❌ 復原失敗：" + json.message); loadBackupList(); }
-    } catch (e) { alert("復原發生錯誤"); loadBackupList(); }
+        if (json.result === 'success') { showToast(`成功復原 "${json.username}"！`, "success"); IS_SHOWING_BACKUPS = false; toggleBackupView(); }
+        else { showToast("復原失敗：" + json.message, "error"); loadBackupList(); }
+    } catch (e) { showToast("復原發生錯誤", "error"); loadBackupList(); }
 }
 
 async function permanentDeleteBackup(fileId, name) {
-    if (!confirm(`⚠️ 警告：確定要「永久刪除」 ${name} 的備份嗎？`)) return;
-    const container = document.getElementById('userListContainer');
+    if (!(await showConfirm(`⚠️ 警告：確定要「永久刪除」 ${name} 的備份嗎？\n(無法復原)`))) return;
     try {
         const res = await fetch(`${API_URL}?action=permanent_delete_backup&admin_user=${CURRENT_USER.username}&file_id=${fileId}`, { method: 'POST' });
         const json = await res.json();
-        if (json.result === 'success') { alert(`已永久刪除 ${name}。`); loadBackupList(); }
-        else alert("刪除失敗：" + json.message);
-    } catch (e) { alert("網路錯誤"); }
+        if (json.result === 'success') { showToast(`已永久刪除 ${name}。`, "success"); loadBackupList(); }
+        else showToast("刪除失敗：" + json.message, "error");
+    } catch (e) { showToast("網路錯誤", "error"); }
 }
 
 function closeUserListModalDirect() { document.getElementById('userListModal').classList.remove('show'); }
 function closeUserListModal(e) { if (e.target.id === 'userListModal') closeUserListModalDirect(); }
 function exitViewMode() { loadOverrides(null); }
 
-// 4. 勤務表與圖片
+// =========== 勤務表與圖片 ===========
 let selectedRosterFile = null; let currentViewingRosterKey = null; 
-function handleRosterSelect(event) {
-    const file = event.target.files[0];
-    const nameDisplay = document.getElementById('fileNameDisplay');
-    if (file) { selectedRosterFile = file; if(nameDisplay) nameDisplay.innerText = file.name; }
-}
 
 function handleRosterPreview(event) {
     const file = event.target.files[0];
@@ -847,30 +979,24 @@ function handleRosterPreview(event) {
     const reselectTag = document.getElementById('reselectTag');
 
     if (file) {
-        selectedRosterFile = file; // 存入全域變數
-        
-        // 讀取圖片並顯示
+        selectedRosterFile = file; 
         const reader = new FileReader();
         reader.onload = function(e) {
             previewImg.src = e.target.result;
-            // 切換 UI 狀態
             dropZone.classList.add('has-image');
             placeholder.style.display = 'none';
             previewBox.style.display = 'flex';
             reselectTag.style.display = 'block';
         };
         reader.readAsDataURL(file);
-    } else {
-        // 如果使用者取消選擇，保持原狀或清空，這裡選擇不動作保留上一張，或可選清空
     }
 }
 
 async function saveRosterImage() {
     const dateInput = document.getElementById('rosterDateInput');
-    // ... (原本的檢查邏輯保持不變) ...
-    if (!dateInput || !dateInput.value) { alert("請先選擇日期！"); return; }
-    if (!selectedRosterFile) { alert("請先選擇圖片！"); return; }
-    if (!CURRENT_USER) { alert("請先登入"); return; }
+    if (!dateInput || !dateInput.value) { showToast("請先選擇日期！", "error"); return; }
+    if (!selectedRosterFile) { showToast("請先選擇圖片！", "error"); return; }
+    if (!CURRENT_USER) { showToast("請先登入", "error"); return; }
     
     const loader = document.getElementById('loadingOverlay');
     if(loader) loader.classList.add('show');
@@ -879,7 +1005,6 @@ async function saveRosterImage() {
     reader.onload = function(e) {
         const img = new Image(); img.src = e.target.result;
         img.onload = async function() {
-            // ... (原本的 canvas 壓縮邏輯保持不變) ...
             const canvas = document.createElement('canvas'); const ctx = canvas.getContext('2d');
             const MAX_WIDTH = 1200; 
             let width = img.width; let height = img.height;
@@ -892,8 +1017,7 @@ async function saveRosterImage() {
 
             try {
                 const response = await fetch(`${API_URL}?action=upload_image&username=${CURRENT_USER.username}`, {
-                    method: 'POST', mode: 'cors',
-                    body: JSON.stringify({ file: dataUrl, name: newFileName })
+                    method: 'POST', mode: 'cors', body: JSON.stringify({ file: dataUrl, name: newFileName })
                 });
                 const result = await response.json();
                 
@@ -901,14 +1025,11 @@ async function saveRosterImage() {
                     const fileId = result.fileId;
                     const rosterKey = `roster_${dateInput.value}`;
                     userOverrides[rosterKey] = `DRIVE|${fileId}`;
-                    await saveToCloud(); // 存檔
-                    
-                    // ★★★ 加入這行：重置介面 ★★★
+                    await saveToCloud(); 
                     resetUploadUI(); 
-                    
                     renderRosterList();
-                } else { alert("上傳失敗: " + result.error); }
-            } catch (err) { console.error(err); alert("上傳發生錯誤"); } 
+                } else { showToast("上傳失敗: " + result.error, "error"); }
+            } catch (err) { console.error(err); showToast("上傳發生錯誤", "error"); } 
             finally { if(loader) loader.classList.remove('show'); }
         };
     };
@@ -918,8 +1039,6 @@ async function saveRosterImage() {
 function resetUploadUI() {
     selectedRosterFile = null;
     document.getElementById('rosterFileInput').value = '';
-    
-    // 恢復 UI 初始狀態
     document.getElementById('dropZone').classList.remove('has-image');
     document.getElementById('uploadPlaceholder').style.display = 'flex';
     document.getElementById('previewBox').style.display = 'none';
@@ -957,160 +1076,79 @@ function openImageModal(key, dateStr) {
     if(title) title.innerText = dateStr;
     if(img) {
         img.src = ''; 
-        // 重置圖片狀態 (大小、位置)
         img.style.transform = `translate(0px, 0px) scale(1)`;
         imgState = { scale: 1, pX: 0, pY: 0 };
         
         let val = userOverrides[key];
         if (val && val.startsWith('DRIVE|')) {
             const fileId = val.split('|')[1];
-            img.src = `https://lh3.googleusercontent.com/d/${fileId}`; 
-        } else if (val) {
-            img.src = val;
-        }
+            img.src = `http://lh3.googleusercontent.com/d/${fileId}`; 
+        } else if (val) { img.src = val; }
         
-        // ★★★ 啟動手勢監聽 ★★★
         initImageGestures(img);
     }
     if(modal) modal.classList.add('show');
 }
 
-// ★★★ 新增：圖片手勢控制核心 (縮放、拖曳、點擊關閉) ★★★
 function initImageGestures(imgElement) {
     const wrapper = document.querySelector('.image-wrapper');
     if (!imgElement || !wrapper) return;
-
-    // 變數初始化
-    let startX = 0, startY = 0;
-    let initialPinchDistance = 0;
-    let isDragging = false;
-    let isPinching = false;
-    
-    // 紀錄上一動作結束時的狀態
-    let lastScale = 1;
-    let lastPointX = 0;
-    let lastPointY = 0;
-    
-    // 用來判斷是否為「單點」
-    let touchStartTime = 0;
-    let hasMoved = false;
-
-    // 移除舊的監聽器 (防止重複綁定)
-    // 簡單做法：用 cloneNode 替換元素來清除 EventListener
+    let startX = 0, startY = 0; let initialPinchDistance = 0;
+    let isDragging = false; let isPinching = false;
+    let lastScale = 1; let lastPointX = 0; let lastPointY = 0;
+    let touchStartTime = 0; let hasMoved = false;
     const newWrapper = wrapper.cloneNode(true);
     wrapper.parentNode.replaceChild(newWrapper, wrapper);
-    // 重新抓取新元素裡的 img
     const newImg = newWrapper.querySelector('img'); 
 
-    // --- 1. 觸控開始 (Touch Start) ---
     newWrapper.addEventListener('touchstart', function(e) {
-        hasMoved = false;
-        touchStartTime = new Date().getTime();
-
-        // 兩指：縮放模式
-        if (e.touches.length === 2) {
-            isPinching = true;
-            isDragging = false;
-            initialPinchDistance = getDistance(e.touches);
-        } 
-        // 單指：拖曳模式
-        else if (e.touches.length === 1) {
-            isPinching = false;
-            isDragging = true;
-            startX = e.touches[0].clientX - lastPointX;
-            startY = e.touches[0].clientY - lastPointY;
-        }
+        hasMoved = false; touchStartTime = new Date().getTime();
+        if (e.touches.length === 2) { isPinching = true; isDragging = false; initialPinchDistance = getDistance(e.touches); } 
+        else if (e.touches.length === 1) { isPinching = false; isDragging = true; startX = e.touches[0].clientX - lastPointX; startY = e.touches[0].clientY - lastPointY; }
     });
 
-    // --- 2. 觸控移動 (Touch Move) ---
     newWrapper.addEventListener('touchmove', function(e) {
-        e.preventDefault(); // 禁止瀏覽器預設捲動
-        hasMoved = true; // 標記有移動過，所以不是單純點擊
-
-        // 縮放邏輯
+        e.preventDefault(); hasMoved = true; 
         if (isPinching && e.touches.length === 2) {
-            const currentDistance = getDistance(e.touches);
-            const zoomFactor = currentDistance / initialPinchDistance;
-            
-            // 限制縮放範圍 (0.5倍 ~ 5倍)
-            let newScale = lastScale * zoomFactor;
-            newScale = Math.min(Math.max(0.5, newScale), 5);
-            
-            imgState.scale = newScale;
+            const zoomFactor = getDistance(e.touches) / initialPinchDistance;
+            imgState.scale = Math.min(Math.max(0.5, lastScale * zoomFactor), 5);
             updateTransform(newImg);
-        } 
-        // 拖曳邏輯 (只有放大時才允許拖曳，原尺寸時拖曳沒意義)
-        else if (isDragging && e.touches.length === 1 && imgState.scale > 1) {
-            const x = e.touches[0].clientX - startX;
-            const y = e.touches[0].clientY - startY;
-            
-            imgState.pX = x;
-            imgState.pY = y;
+        } else if (isDragging && e.touches.length === 1 && imgState.scale > 1) {
+            imgState.pX = e.touches[0].clientX - startX; imgState.pY = e.touches[0].clientY - startY;
             updateTransform(newImg);
         }
     });
 
-    // --- 3. 觸控結束 (Touch End) ---
     newWrapper.addEventListener('touchend', function(e) {
-        // 儲存狀態供下次操作使用
-        lastScale = imgState.scale;
-        lastPointX = imgState.pX;
-        lastPointY = imgState.pY;
-        
-        isPinching = false;
-        isDragging = false;
-
-        // ★★★ 單點關閉邏輯 ★★★
-        // 條件：手指數量變為0(離開) + 沒有大幅移動過 + 時間很短(小於300ms)
-        const touchDuration = new Date().getTime() - touchStartTime;
-        if (!hasMoved && touchDuration < 300 && e.touches.length === 0) {
-            // 執行關閉
-            closeImageModalDirect();
-        }
-        
-        // 如果縮得太小，自動彈回原尺寸
+        lastScale = imgState.scale; lastPointX = imgState.pX; lastPointY = imgState.pY;
+        isPinching = false; isDragging = false;
+        if (!hasMoved && (new Date().getTime() - touchStartTime) < 300 && e.touches.length === 0) closeImageModalDirect();
         if (imgState.scale < 1) {
-            imgState.scale = 1;
-            imgState.pX = 0;
-            imgState.pY = 0;
-            lastScale = 1; lastPointX = 0; lastPointY = 0;
+            imgState.scale = 1; imgState.pX = 0; imgState.pY = 0; lastScale = 1; lastPointX = 0; lastPointY = 0;
             updateTransform(newImg);
         }
     });
 
-    // 輔助：更新 CSS
-    function updateTransform(el) {
-        el.style.transform = `translate(${imgState.pX}px, ${imgState.pY}px) scale(${imgState.scale})`;
-    }
-
-    // 輔助：計算兩指距離
-    function getDistance(touches) {
-        const dx = touches[0].clientX - touches[1].clientX;
-        const dy = touches[0].clientY - touches[1].clientY;
-        return Math.sqrt(dx * dx + dy * dy);
-    }
+    function updateTransform(el) { el.style.transform = `translate(${imgState.pX}px, ${imgState.pY}px) scale(${imgState.scale})`; }
+    function getDistance(touches) { return Math.sqrt(Math.pow(touches[0].clientX - touches[1].clientX, 2) + Math.pow(touches[0].clientY - touches[1].clientY, 2)); }
 }
 
 async function deleteCurrentRoster() {
     if (!currentViewingRosterKey) return;
     const isAdmin = (CURRENT_USER && CURRENT_USER.username === 'SHIH');
     const isOwner = (!VIEWING_MODE_USER); 
-    if (!isOwner && !isAdmin) { alert("您沒有權限刪除他人的勤務表"); return; }
+    if (!isOwner && !isAdmin) { showToast("您沒有權限刪除他人的勤務表", "error"); return; }
 
-    if (confirm("確定要刪除這張勤務表嗎？\n(雲端檔案也將一併刪除)")) { 
+    if (await showConfirm("確定要刪除這張勤務表嗎？\n(雲端檔案也將一併刪除)")) { 
         const loader = document.getElementById('loadingOverlay');
         if(loader) loader.classList.add('show');
-
         const val = userOverrides[currentViewingRosterKey];
         if (val && val.startsWith('DRIVE|')) {
-            const fileId = val.split('|')[1];
-            try { await fetch(`${API_URL}?action=delete_drive_file&file_id=${fileId}`, { method: 'POST' }); } catch (e) { console.error("雲端檔案刪除失敗", e); }
+            try { await fetch(`${API_URL}?action=delete_drive_file&file_id=${val.split('|')[1]}`, { method: 'POST' }); } catch (e) {}
         }
         delete userOverrides[currentViewingRosterKey]; 
         closeImageModalDirect(); 
-        
-        try { await saveToCloud(); } catch (e) { console.error("存檔失敗", e); alert("存檔發生錯誤"); } 
-        finally { if(loader) loader.classList.remove('show'); }
+        try { await saveToCloud(); } catch (e) { showToast("存檔發生錯誤", "error"); } finally { if(loader) loader.classList.remove('show'); }
     }
 }
 function closeImageModalDirect() { 
@@ -1119,13 +1157,12 @@ function closeImageModalDirect() {
     currentViewingRosterKey = null; 
 }
 
-// 5. 導航與模式
+// =========== 導航與模式 ===========
 function setAppMode(isEditing) {
     READ_ONLY_MODE = !isEditing;
     const menuBtn = document.getElementById('menuEditBtn');
     const inputR = document.getElementById('inputReserved');
     if (inputR) { inputR.disabled = !isEditing; inputR.style.backgroundColor = isEditing ? 'white' : '#f0f0f0'; }
-
     if (isEditing) {
         if(menuBtn) { menuBtn.innerHTML = "💾 儲存並離開"; menuBtn.classList.add('saving'); }
         document.body.classList.add('editing-mode');
@@ -1138,78 +1175,39 @@ function setAppMode(isEditing) {
 function toggleEditMode() {
     const menu = document.getElementById('userDropdown');
     if(menu) menu.classList.remove('show');
-    if (READ_ONLY_MODE) { setAppMode(true); alert("已進入修改模式\n完成後請再次點選「儲存並離開」"); }
+    if (READ_ONLY_MODE) { setAppMode(true); showToast("已進入修改模式\n完成後請點選「儲存並離開」", "info"); }
     else { saveToCloud(); }
 }
 
 function switchTab(tabName) {
-    // ... (原本的 tab 切換邏輯) ...
     const tabs = document.querySelectorAll('.tab-btn');
     const sections = document.querySelectorAll('.view-section');
     tabs.forEach(t => t.classList.remove('active'));
     sections.forEach(s => s.classList.remove('active'));
     
-    if (tabName === 'calendar') { 
-        document.getElementById('view-calendar').classList.add('active'); 
-        tabs[0].classList.add('active'); 
-        renderCalendar(); 
-    }
-    else if (tabName === 'stats') { 
-        document.getElementById('view-stats').classList.add('active'); 
-        tabs[1].classList.add('active'); 
-        calculateLeaveStats(); 
-    }
+    if (tabName === 'calendar') { document.getElementById('view-calendar').classList.add('active'); tabs[0].classList.add('active'); renderCalendar(); }
+    else if (tabName === 'stats') { document.getElementById('view-stats').classList.add('active'); tabs[1].classList.add('active'); calculateLeaveStats(); }
     else if (tabName === 'image') { 
-        document.getElementById('view-image').classList.add('active'); 
-        tabs[2].classList.add('active'); 
-        renderRosterList(); 
-        
-        // ★★★ 加入這行：切換到勤務表頁面時，自動幫日期欄位填入今天 ★★★
+        document.getElementById('view-image').classList.add('active'); tabs[2].classList.add('active'); renderRosterList(); 
         const dateInput = document.getElementById('rosterDateInput');
         if (dateInput && !dateInput.value) {
             const today = new Date();
-            const y = today.getFullYear();
-            const m = String(today.getMonth() + 1).padStart(2, '0');
-            const d = String(today.getDate()).padStart(2, '0');
-            dateInput.value = `${y}-${m}-${d}`;
+            dateInput.value = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`;
         }
     }
     refreshCurrentPage(); 
 }
 
-let touchStartX = 0;
-let touchStartY = 0;
-const minSwipeDistance = 100; // 門檻從 50 提高到 100 (要滑長一點才算)
-const maxVerticalDistance = 60; // 垂直容錯值 (上下滑動超過這個距離，就不算左右切換)
-
+let touchStartX = 0; let touchStartY = 0; const minSwipeDistance = 100; const maxVerticalDistance = 60; 
 const calendarContainer = document.querySelector('.container');
-
-calendarContainer.addEventListener('touchstart', function(e) {
-    touchStartX = e.changedTouches[0].screenX;
-    touchStartY = e.changedTouches[0].screenY; // 紀錄垂直位置
-}, false);
-
+calendarContainer.addEventListener('touchstart', function(e) { touchStartX = e.changedTouches[0].screenX; touchStartY = e.changedTouches[0].screenY; }, false);
 calendarContainer.addEventListener('touchend', function(e) {
-    const touchEndX = e.changedTouches[0].screenX;
-    const touchEndY = e.changedTouches[0].screenY;
-    handleSwipe(touchEndX, touchEndY);
+    const distanceX = e.changedTouches[0].screenX - touchStartX;
+    const distanceY = e.changedTouches[0].screenY - touchStartY;
+    if (Math.abs(distanceX) > minSwipeDistance && Math.abs(distanceY) < maxVerticalDistance) {
+        if (distanceX < 0) changeMonth(1); else changeMonth(-1);
+    }
 }, false);
 
-function handleSwipe(endX, endY) {
-    const distanceX = endX - touchStartX;
-    const distanceY = endY - touchStartY;
-
-    // 條件 1: 左右滑動距離必須大於 minSwipeDistance (100px)
-    // 條件 2: 上下滑動距離必須小於 maxVerticalDistance (60px) -> 防止在捲動網頁時誤觸
-    if (Math.abs(distanceX) > minSwipeDistance && Math.abs(distanceY) < maxVerticalDistance) {
-        if (distanceX < 0) {
-            changeMonth(1); // 向左滑 -> 下個月
-        } else {
-            changeMonth(-1); // 向右滑 -> 上個月
-        }
-    }
-}
-
-// 啟動程序
 jumpToToday();
 checkAuth();
