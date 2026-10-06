@@ -1,6 +1,6 @@
 {
-    "name": "多人排班系統",
-    "short_name": "排班系統",
+    "name": "班表系統",
+    "short_name": "班表系統",
     "description": "監所排班與休假管理系統",
     "start_url": "./index.html",
     "display": "standalone",

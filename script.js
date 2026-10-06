@@ -81,16 +81,46 @@ function showConfirm(message) {
 
 // =========== 班表初始設定 (動態生成引擎) ===========
 
+// ★ 動態更新搭班選項 (例如甲2，就只能選 1 或 3)
+function updatePartnerOptions() {
+    const grp = document.getElementById('setupGroup').value || '甲2';
+    const num = grp.replace(/[^0-9]/g, '');
+    const partnerSelect = document.getElementById('setupPartner');
+    partnerSelect.innerHTML = '';
+    ['1', '2', '3'].forEach(n => {
+        if (n !== num) {
+            const opt = document.createElement('option');
+            opt.value = n;
+            opt.innerText = `第 ${n} 組`;
+            partnerSelect.appendChild(opt);
+        }
+    });
+}
+
 function openSetupModal() {
     toggleUserMenu(); 
     let unit = '';
+    let currentGrp = CURRENT_USER ? CURRENT_USER.group : '甲2';
+    let currentPartner = '';
+    let currentCycle = '6'; // ★ 預設為 6 天一輪
+
     if (userOverrides['config_setup']) {
         try {
             const config = JSON.parse(userOverrides['config_setup']);
             unit = config.unit || '';
+            if (config.customGroup) currentGrp = config.customGroup;
+            if (config.partner) currentPartner = config.partner;
+            if (config.cycle) currentCycle = config.cycle; // ★ 讀取設定
         } catch(e) {}
     }
+    
     document.getElementById('setupUnit').value = unit;
+    document.getElementById('setupGroup').value = currentGrp;
+    document.getElementById('setupCycle').value = currentCycle; // ★ 帶入選單
+    
+    updatePartnerOptions(); 
+    if (currentPartner) document.getElementById('setupPartner').value = currentPartner;
+    
     const dateInput = document.getElementById('setupDate');
     if (!dateInput.value) {
         const today = new Date();
@@ -103,29 +133,45 @@ function closeSetupModal() {
     document.getElementById('setupModal').classList.remove('show');
 }
 
-// =========== 班表初始設定 ===========
-function submitSetup() {
+// ★ 注意：前面加了 async
+async function submitSetup() {
     const unit = document.getElementById('setupUnit').value.trim();
+    const newGroup = document.getElementById('setupGroup').value;
+    const partner = document.getElementById('setupPartner').value;
+    const cycle = document.getElementById('setupCycle').value; // ★ 抓取新規律
     const dateStr = document.getElementById('setupDate').value;
     const shiftType = document.getElementById('setupShiftType').value; 
     
-    if(!unit || !dateStr || !shiftType) { showToast("請填寫完整", "error"); return; }
+    if(!unit || !dateStr || !shiftType || !newGroup || !partner || !cycle) { showToast("請填寫完整", "error"); return; }
+    
+    if (userOverrides['config_setup']) {
+        const confirmMsg = "⚠️ 警告：重新設定將會套用新規則，並「改變過去所有的預設班別」！\n\n(您手動疊加的休假與加班紀錄不會消失，但底層推算會全變)\n\n若只是想看別組班表，請使用「👀 觀看他人」功能。\n\n您確定要覆蓋設定嗎？";
+        if (!(await showConfirm(confirmMsg))) return;
+    }
     
     const selectedDate = new Date(dateStr);
     selectedDate.setHours(0,0,0,0);
     
-    // 儲存設定：只需要記錄起始日和當天的班別
     const config = {
         unit: unit,
         anchorTime: selectedDate.getTime(),
-        shiftType: shiftType, // 'main' 或是 'sub'
-        isNewMainSubRule: true 
+        shiftType: shiftType, 
+        isNewMainSubRule: true,
+        customGroup: newGroup, 
+        partner: partner,
+        cycle: cycle // ★ 存入設定
     };
     
     userOverrides['config_setup'] = JSON.stringify(config);
-    saveToCloud();
+
+    if (CURRENT_USER) CURRENT_USER.group = newGroup;
+    CURRENT_DISPLAY_GROUP = newGroup;
+    localStorage.setItem('shifts_group', newGroup);
+
+    saveToCloud(true);
     closeSetupModal();
     updateUserInfoUI();
+    refreshCurrentPage();
     showToast("班表初始設定完成！", "success");
 }
 
@@ -165,32 +211,47 @@ function getDayInfo(date) {
                 const d2 = Date.UTC(useAnchor.getFullYear(), useAnchor.getMonth(), useAnchor.getDate());
                 let diffDays = Math.floor((d1 - d2) / (1000 * 60 * 60 * 24));
                 
-                // 個人六日迴圈 (0=第一天, 2=第三天)
-                let personalIndex = diffDays % 6;
-                if (personalIndex < 0) personalIndex += 6;
+                // ★★★ 讀取循環長度 (6天 或 9天) ★★★
+                let cycleLen = parseInt(setup.cycle) === 9 ? 9 : 6;
+                        
+                let personalIndex = diffDays % cycleLen;
+                if (personalIndex < 0) personalIndex += cycleLen;
                 
-                // 只要是第0天或第2天就是上班
-                let isWork = (personalIndex === 0 || personalIndex === 2);
+                // ★★★ 判斷是否為上班日 ★★★
+                let isWork = false;
+                if (cycleLen === 6) isWork = (personalIndex === 0 || personalIndex === 2);
+                if (cycleLen === 9) isWork = (personalIndex === 0 || personalIndex === 2 || personalIndex === 4);
                 
                 if (isWork) {
                     let isFirstDayMain = (setup.shiftType === 'main');
                     let currentRole = '';
                     
-                    // 根據設定分配正副班
-                    if (personalIndex === 0) currentRole = isFirstDayMain ? 'main' : 'sub';
-                    if (personalIndex === 2) currentRole = isFirstDayMain ? 'sub' : 'main';
-                    
-                    // 自動推算全球班別代號 (如: 甲12)
                     let prefix = myGroup.charAt(0) || '甲';
                     let num = myGroup.replace(/[^0-9]/g, '');
+                    
+                    let partnerDay0 = setup.partner || '1'; 
+                    let partnerDay2 = ['1', '2', '3'].find(x => x !== num && x !== partnerDay0);
+                    
+                    let activePartner = partnerDay0; // 預設搭班
+                    
+                    // ★ 智慧派配正副班與搭班對象 (支援第三天上班自動輪替)
+                    if (personalIndex === 0) {
+                        currentRole = isFirstDayMain ? 'main' : 'sub';
+                        activePartner = partnerDay0;
+                    } else if (personalIndex === 2) {
+                        currentRole = isFirstDayMain ? 'sub' : 'main';
+                        activePartner = partnerDay2;
+                    } else if (personalIndex === 4) {
+                        currentRole = isFirstDayMain ? 'main' : 'sub';
+                        activePartner = partnerDay0; // 9天循環的第三天，搭班對象換回來
+                    }
+                    
                     let shiftCode = '';
+                    if ((num === '1' && activePartner === '2') || (num === '2' && activePartner === '1')) shiftCode = prefix + '12';
+                    else if ((num === '2' && activePartner === '3') || (num === '3' && activePartner === '2')) shiftCode = prefix + '23';
+                    else if ((num === '3' && activePartner === '1') || (num === '1' && activePartner === '3')) shiftCode = prefix + '31';
+                    else shiftCode = myGroup; 
                     
-                    if (num === '1') shiftCode = currentRole === 'main' ? prefix + '12' : prefix + '31';
-                    else if (num === '2') shiftCode = currentRole === 'main' ? prefix + '23' : prefix + '12';
-                    else if (num === '3') shiftCode = currentRole === 'main' ? prefix + '31' : prefix + '23';
-                    else shiftCode = myGroup; // 防呆
-                    
-                    // 回傳明確的 role，讓 UI 知道要加上 (正) 還是 (副)
                     return { isWork: true, text: '上班', shiftCode: shiftCode, role: currentRole };
                 } else {
                     return { isWork: false, text: '休假', shiftCode: '' };
@@ -239,6 +300,22 @@ function calculateDayStats(dayInfo, overrideString) {
             else if (r.type === 'off') { base_normal += r.wk; base_standby += r.sb; labels.push(r.label); }
         } else if (item.includes('|')) {
             const parts = item.split('|'); const type = parts[0]; const subtype = parts[1]; const val1 = parseFloat(parts[2]) || 0; 
+            // ★★★ 新增：解析全自訂標籤 ★★★
+            if (type === 'custom' && (subtype === 'add' || subtype === 'off')) {
+                const customLabel = parts[2];
+                const wk = parseFloat(parts[3]) || 0;
+                const sb = parseFloat(parts[4]) || 0;
+                
+                if (subtype === 'add') {
+                    overtime += wk; add_standby += sb;
+                    // 在標籤前面加上特殊記號 ++ 供前端渲染判定顏色
+                    labels.push(`++${customLabel}${wk > 0 ? wk + 'h' : ''}`); 
+                } else if (subtype === 'off') {
+                    base_normal -= wk; base_standby -= sb;
+                    // 加上特殊記號 -- 判定顏色
+                    labels.push(`--${customLabel}${wk > 0 ? wk + 'h' : ''}`);
+                }
+            }
             if (type === 'leave' || type === 'comp') {
                 base_normal -= val1; base_standby -= (val1 / 4); 
                 let lbl = type === 'comp' ? '補休' : (LEAVE_TYPES[subtype] ? LEAVE_TYPES[subtype].label : subtype);
@@ -307,8 +384,9 @@ async function doLogin() {
             CURRENT_DISPLAY_GROUP = CURRENT_USER.group;
             userOverrides = json.data;
             document.getElementById('authModal').style.display = 'none';
+            updateUserInfoUI();
             jumpToToday();
-            setAppMode(false);
+            READ_ONLY_MODE = false;
             showToast(`歡迎回來，${CURRENT_USER.username}！`, "success");
             
             // 全新帳號自動跳出設定視窗
@@ -402,18 +480,40 @@ async function loadOverrides(targetUsername = null) {
         delete data._userGroup;
         userOverrides = data;
         
+        // ★★★ 新增：如果有自訂變更過組別，優先使用新組別 ★★★
+        if (userOverrides['config_setup']) {
+            try {
+                const setup = JSON.parse(userOverrides['config_setup']);
+                if (setup.customGroup && !targetUsername) {
+                    CURRENT_USER.group = setup.customGroup;
+                    CURRENT_DISPLAY_GROUP = setup.customGroup;
+                    localStorage.setItem('shifts_group', setup.customGroup);
+                }
+            } catch(e) {}
+        }
+        
+        if (userOverrides['config_setup']) {
+            try {
+                const setup = JSON.parse(userOverrides['config_setup']);
+                if (setup.customGroup) {
+                    CURRENT_USER.group = setup.customGroup;
+                    CURRENT_DISPLAY_GROUP = setup.customGroup;
+                    localStorage.setItem('shifts_group', setup.customGroup);
+                }
+            } catch(e) {}
+        }
+        
         if (targetUsername) {
             VIEWING_MODE_USER = targetUsername;
             document.getElementById('viewingOtherAlert').style.display = 'flex';
             document.getElementById('viewingTargetName').innerText = targetUsername;
-            READ_ONLY_MODE = true; document.getElementById('menuEditBtn').style.display = 'none';
+            READ_ONLY_MODE = true; // 觀看別人：鎖定
         } else {
             VIEWING_MODE_USER = null;
             document.getElementById('viewingOtherAlert').style.display = 'none';
-            document.getElementById('menuEditBtn').style.display = 'block';
+            READ_ONLY_MODE = false; // ★★★ 觀看自己：永遠解鎖 ★★★
         }
         refreshCurrentPage();
-        setAppMode(false);
         updateUserInfoUI();
 
         if (!targetUsername && !userOverrides['config_setup'] && Object.keys(userOverrides).filter(k => k !== '_userGroup').length === 0) {
@@ -423,16 +523,17 @@ async function loadOverrides(targetUsername = null) {
     finally { if(loader) loader.classList.remove('show'); }
 }
 
-async function saveToCloud() {
+// =========== 背景自動儲存機制 ===========
+async function saveToCloud(silent = false) {
     if (!CURRENT_USER) return;
     let targetUsername = VIEWING_MODE_USER || CURRENT_USER.username;
-    if (VIEWING_MODE_USER && CURRENT_USER.username !== 'SHIH') { showToast("觀看模式下無法修改！", "error"); return; }
-    
-    const menuBtn = document.getElementById('menuEditBtn');
-    if(menuBtn) { menuBtn.innerText = "⏳ 儲存中..."; menuBtn.disabled = true; }
+    if (VIEWING_MODE_USER && CURRENT_USER.username !== 'SHIH') { 
+        if(!silent) alert("觀看模式下無法修改！"); 
+        return; 
+    }
 
     const inputR = document.getElementById('inputReserved');
-    if(inputR) {
+    if(inputR && !READ_ONLY_MODE) {
         const currentData = getMonthData(currentMonthIndex);
         const key = `${KEY_RESERVED_PREFIX}${currentData.year}_${currentData.month}`;
         userOverrides[key] = String(inputR.value);
@@ -440,16 +541,21 @@ async function saveToCloud() {
     
     try {
         await fetch(`${API_URL}?action=save&username=${targetUsername}`, {
-            method: 'POST', mode: 'no-cors', headers: { 'Content-Type': 'application/json' },
+            method: 'POST', mode: 'no-cors', 
+            headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(userOverrides)
         });
-        showToast("資料已同步更新！", "success");
-    } catch (e) { showToast("資料上傳失敗", "error"); } 
-    finally { 
+        
+        // 如果不是靜默模式，才跳出提示
+        if (!silent) alert("✅ 資料已同步更新！");
+        
+    } catch (e) { 
+        console.error(e); 
+        if (!silent) alert("❌ 上傳失敗"); 
+    } finally { 
         const loader = document.getElementById('loadingOverlay');
         if(loader) loader.classList.remove('show');
-        if(menuBtn) { menuBtn.disabled = false; menuBtn.style.display = VIEWING_MODE_USER ? 'none' : 'block'; menuBtn.innerText = "🔧 修改班表"; }
-        setAppMode(false); refreshCurrentPage(); 
+        refreshCurrentPage(); 
     }
 }
 
@@ -463,6 +569,12 @@ function refreshCurrentPage() {
     if (document.getElementById('view-calendar').classList.contains('active')) renderCalendar(); 
     if (document.getElementById('view-stats').classList.contains('active')) calculateLeaveStats();
     if (document.getElementById('view-image').classList.contains('active')) renderRosterList();
+    
+    // ★ 新增：如果年度班表開著，也順便即時更新它！
+    const annualModal = document.getElementById('annualModal');
+    if (annualModal && annualModal.classList.contains('show')) {
+        renderAnnualCalendar();
+    }
 }
 
 function renderCalendar() {
@@ -507,15 +619,28 @@ function createCalendarHTML(year, month) {
             let isWork = (stats.normal > 0 || stats.overtime > 0); 
             td.className = isWork ? 'is-work' : 'is-rest'; 
             
-            // ★★★ 修改：用 stamp-container 把所有的標籤包起來 ★★★
+            // ★★★ 修改：智慧判定印章顏色 (支援全自訂特規記號) ★★★
             let stampHtml = '';
             if (stats.labels && stats.labels.length > 0) {
                 stampHtml += '<div class="stamp-container">';
                 stats.labels.forEach(lbl => {
-                    let type = 'type-off';
-                    if (lbl.includes('加') || lbl.includes('勤') || lbl.includes('自訂')) type = 'type-add';
-                    if (lbl.includes('假') || lbl.includes('休') || lbl.includes('換')) type = 'type-leave';
-                    stampHtml += `<div class="stamp ${type}">${lbl}</div>`;
+                    let typeClass = 'type-off';
+                    let displayText = lbl;
+                    
+                    // 攔截並剝除自訂標籤的顏色記號
+                    if (lbl.startsWith('++')) {
+                        typeClass = 'type-add';
+                        displayText = lbl.substring(2);
+                    } else if (lbl.startsWith('--')) {
+                        typeClass = 'type-leave';
+                        displayText = lbl.substring(2);
+                    } else {
+                        // 原本的系統預設關鍵字判定
+                        if (lbl.includes('加') || lbl.includes('勤') || lbl.includes('自訂')) typeClass = 'type-add';
+                        if (lbl.includes('假') || lbl.includes('休') || lbl.includes('換')) typeClass = 'type-leave';
+                    }
+                    
+                    stampHtml += `<div class="stamp ${typeClass}">${displayText}</div>`;
                 });
                 stampHtml += '</div>';
             }
@@ -553,26 +678,47 @@ function createCalendarHTML(year, month) {
         standby: statsRealized.standby + statsFuture.standby
     };
 
-    const statsDiv = document.createElement('div'); statsDiv.className = 'month-stats';
+    const statsDiv = document.createElement('div'); 
+    statsDiv.className = 'month-stats';
+
+    // ★★★ 新增：摺疊按鈕與內容區塊 ★★★
+    const toggleBtn = document.createElement('div');
+    toggleBtn.className = 'stats-toggle-btn';
+    toggleBtn.innerHTML = `<span>📊 當月結算與統計</span><span class="toggle-icon">▼</span>`;
+
+    const contentDiv = document.createElement('div');
+    contentDiv.className = 'stats-content-wrapper';
+    contentDiv.style.display = 'none'; // 預設摺疊起來不顯示
+
+    toggleBtn.onclick = () => {
+        const isHidden = contentDiv.style.display === 'none';
+        contentDiv.style.display = isHidden ? 'block' : 'none';
+        toggleBtn.querySelector('.toggle-icon').innerText = isHidden ? '▲' : '▼';
+    };
+
     const generateRowHtml = (title, data, colorTitle = '#666') => `
         <div class="stat-group-title" style="color:${colorTitle}; margin-top:10px;">${title}</div>
         <div class="stats-grid" style="grid-template-columns: repeat(4, 1fr);">
-            <div class="stat-card"><span class="stat-label">上班日</span><span class="stat-value">${data.days}</span></div>
-            <div class="stat-card"><span class="stat-label">上班時</span><span class="stat-value highlight">${data.normal}</span></div>
-            <div class="stat-card"><span class="stat-label">加班時</span><span class="stat-value overtime">${data.overtime}</span></div>
-            <div class="stat-card"><span class="stat-label">備勤時</span><span class="stat-value" style="color:#666">${data.standby}</span></div>
+            <div class="stat-card"><span class="stat-label">日數</span><span class="stat-value">${data.days}</span></div>
+            <div class="stat-card"><span class="stat-label">正常</span><span class="stat-value highlight">${data.normal}</span></div>
+            <div class="stat-card"><span class="stat-label">加班</span><span class="stat-value overtime">${data.overtime}</span></div>
+            <div class="stat-card"><span class="stat-label">備勤</span><span class="stat-value" style="color:#666">${data.standby}</span></div>
         </div>`;
         
-    let statsHtml = generateRowHtml('結算至今日 (已發生)', statsRealized, '#d84315'); 
-    statsHtml += generateRowHtml('全月總統計 (預估)', statsTotal, '#1565c0');  
+    let statsHtml = generateRowHtml('已實現 (包含今日)', statsRealized, '#d84315');
+    statsHtml += generateRowHtml('全月總計 (預估)', statsTotal, '#1565c0');
     
-    statsDiv.innerHTML = statsHtml; 
-    monthContainer.appendChild(table); monthContainer.appendChild(statsDiv); 
+    contentDiv.innerHTML = statsHtml;
+    statsDiv.appendChild(toggleBtn);
+    statsDiv.appendChild(contentDiv);
+
+    monthContainer.appendChild(table); 
+    monthContainer.appendChild(statsDiv);
+    
     return monthContainer;
 }
 
-// =========== 休假管理 (儀表板) ===========
-
+// ★★★ 休假管理邏輯 (極簡橫條版 - 支援點擊看明細) ★★★
 function calculateLeaveStats() {
     const currentData = getMonthData(currentMonthIndex);
     const viewYear = currentData.year; 
@@ -587,8 +733,14 @@ function calculateLeaveStats() {
     }
     
     let usage = {}; 
-    Object.keys(LEAVE_TYPES).forEach(k => usage[k] = 0);
+    let leaveHistory = {}; // ★ 新增：儲存各假別的歷史紀錄
+    Object.keys(LEAVE_TYPES).forEach(k => { 
+        usage[k] = 0; 
+        leaveHistory[k] = []; 
+    });
+    
     let compStats = { used: 0 };
+    let compHistory = []; // ★ 新增：儲存補休的歷史紀錄
 
     Object.keys(userOverrides).forEach(key => {
         if (!key.match(/^\d{4}-\d{2}-\d{2}$/)) return;
@@ -602,15 +754,23 @@ function calculateLeaveStats() {
             if (item.includes('|')) {
                 const [type, subtype, hoursStr] = item.split('|');
                 const hours = parseFloat(hoursStr) || 0;
+                
+                // 年度假別：只要年份對就累計，並存入歷史
                 if (type === 'leave' && dataYear === viewYear) {
-                    if (usage[subtype] !== undefined) usage[subtype] += hours;
+                    if (usage[subtype] !== undefined) {
+                        usage[subtype] += hours;
+                        leaveHistory[subtype].push({ date: key, hours: hours });
+                    }
                 }
+                // 補休：年份跟月份都要對，並存入歷史
                 if (type === 'comp' && dataYear === viewYear && dataMonth === viewMonth) {
                     compStats.used += hours; 
+                    compHistory.push({ date: key, hours: hours });
                 }
             } else {
                 if (item === 'comp_leave' && dataYear === viewYear && dataMonth === viewMonth) {
                     compStats.used += 16; 
+                    compHistory.push({ date: key, hours: 16 });
                 }
             }
         });
@@ -626,15 +786,17 @@ function calculateLeaveStats() {
 
     const compCard = document.createElement('div');
     compCard.className = 'leave-card comp-card';
+    // ★ 綁定點擊事件：呼叫明細視窗
+    compCard.onclick = () => openLeaveDetail('comp', '補休', `${viewMonth}月`);
     compCard.innerHTML = `
-        <div class="l-header">
-            <span>🌙</span> 補休
-        </div>
+        <div class="l-header"><span>🌙</span> 補休</div>
         <div class="l-body">
             <div class="l-item">
-                預留 <input type="number" id="inputReserved" value="${reserved}" class="mini-input"
-                       ${READ_ONLY_MODE ? 'disabled' : ''} oninput="updateCompBalanceLocal()">
-            </div>
+                預留 <input type="number" id="inputReserved" value="${reserved}" 
+                       class="mini-input" ${READ_ONLY_MODE ? 'disabled' : ''}
+                       oninput="updateCompBalanceLocal()"
+                       onchange="saveToCloud(true)"
+                       onclick="event.stopPropagation()"> </div>
             <div class="l-item">已用 <span class="l-val">${compStats.used}</span></div>
             <div class="l-item">剩餘 <span id="dynamicCompBalance" class="l-val balance" style="color:${balanceColor}">${compBalance}</span></div>
         </div>
@@ -656,6 +818,8 @@ function calculateLeaveStats() {
 
         const card = document.createElement('div');
         card.className = `leave-card ${conf.color}`;
+        // ★ 綁定點擊事件：呼叫明細視窗
+        card.onclick = () => openLeaveDetail(typeKey, conf.label, `${viewYear}年度`);
         card.innerHTML = `
             <div class="l-header"><span>${icon}</span> ${conf.label}</div>
             <div class="l-body">
@@ -666,8 +830,59 @@ function calculateLeaveStats() {
         `;
         container.appendChild(card);
     });
+    
+    // 將歷史資料存入全域供點擊時讀取
     window.currentCompStats = compStats; 
+    window.currentLeaveHistory = leaveHistory; 
+    window.currentCompHistory = compHistory; 
 }
+
+// ★★★ 開啟休假明細視窗 ★★★
+function openLeaveDetail(typeKey, typeLabel, periodLabel) {
+    const modal = document.getElementById('leaveDetailModal');
+    const titleEl = document.getElementById('leaveDetailTitle');
+    const listEl = document.getElementById('leaveDetailList');
+
+    if(!modal || !titleEl || !listEl) return;
+
+    titleEl.innerText = `${typeLabel}明細 (${periodLabel})`;
+
+    // 抓取對應的歷史陣列
+    let history = [];
+    if (typeKey === 'comp') {
+        history = window.currentCompHistory || [];
+    } else {
+        history = (window.currentLeaveHistory && window.currentLeaveHistory[typeKey]) ? window.currentLeaveHistory[typeKey] : [];
+    }
+
+    // 依照日期先後排序
+    history.sort((a, b) => a.date.localeCompare(b.date));
+
+    if (history.length === 0) {
+        listEl.innerHTML = '<div style="text-align:center; color:#999; padding:30px 10px;">目前尚無使用紀錄</div>';
+    } else {
+        let html = '';
+        history.forEach(record => {
+            // 將 2026-03-05 轉換成 3/5
+            const parts = record.date.split('-');
+            const dStr = `${parseInt(parts[1])}月${parseInt(parts[2])}日`; 
+            
+            html += `
+                <div class="detail-list-item">
+                    <span class="detail-date">${dStr}</span>
+                    <span class="detail-hours">${record.hours} 小時</span>
+                </div>
+            `;
+        });
+        listEl.innerHTML = html;
+    }
+    
+    modal.classList.add('show');
+}
+
+function closeLeaveDetailDirect() { document.getElementById('leaveDetailModal').classList.remove('show'); }
+function closeLeaveDetail(event) { if (event.target.id === 'leaveDetailModal') closeLeaveDetailDirect(); }
+
 
 function updateCompBalanceLocal() {
     const input = document.getElementById('inputReserved');
@@ -681,24 +896,123 @@ function updateCompBalanceLocal() {
 }
 
 // =========== 班表修改 Modal (三階段) ===========
-
 function openModal(date) {
     if (READ_ONLY_MODE) return;
     modalCurrentDateKey = formatDateKey(date);
     document.getElementById('modalDateTitle').innerText = `${date.getMonth()+1}/${date.getDate()}`;
+    
+    // 1. 強制重置並隱藏所有輸入區塊
+    const fcArea = document.getElementById('fullyCustomArea');
+    if (fcArea) fcArea.style.display = 'none';
+    const cArea = document.getElementById('customHourArea');
+    if (cArea) cArea.style.display = 'none';
+    const fcLabel = document.getElementById('fcLabel');
+    if (fcLabel) fcLabel.value = ''; 
+    if (document.getElementById('fcWorkHour')) document.getElementById('fcWorkHour').value = ''; 
+    if (document.getElementById('fcStandbyHour')) document.getElementById('fcStandbyHour').value = ''; 
+
+    // 2. 獲取並顯示當天「目前設定狀態」
+    const overrideString = userOverrides[modalCurrentDateKey];
+    const dayInfo = getDayInfo(date);
+    const statusDiv = document.getElementById('currentDayStatus');
+    
+    if (statusDiv && dayInfo) {
+        if (!overrideString) {
+            statusDiv.style.display = 'none';
+        } else {
+            statusDiv.style.display = 'block';
+            
+            // ★★★ 修改：直接解析原始字串，並加上獨立的 X 刪除按鈕 ★★★
+            const items = overrideString.split(',');
+            let labelsHtml = items.map((item, index) => {
+                let labelText = item;
+                let typeClass = 'base';
+                
+                // 解析各種類型的設定以轉換為文字
+                if (OVERRIDE_RULES[item]) {
+                    labelText = OVERRIDE_RULES[item].label;
+                    if (OVERRIDE_RULES[item].type === 'add') typeClass = 'add';
+                    else if (OVERRIDE_RULES[item].type === 'off') typeClass = 'leave';
+                } else if (item.includes('|')) {
+                    const parts = item.split('|');
+                    if (parts[0] === 'custom' && (parts[1] === 'add' || parts[1] === 'off')) {
+                        labelText = parts[2] + (parseFloat(parts[3]) > 0 ? parts[3] + 'h' : '');
+                        typeClass = parts[1] === 'add' ? 'add' : 'leave';
+                    } else if (parts[0] === 'leave' || parts[0] === 'comp') {
+                        let h = parseFloat(parts[2]) || 0;
+                        let lbl = parts[0] === 'comp' ? '補休' : (LEAVE_TYPES[parts[1]] ? LEAVE_TYPES[parts[1]].label : parts[1]);
+                        labelText = lbl + h + 'h';
+                        typeClass = 'leave';
+                    } else if (parts[0] === 'add' && parts[1] === 'custom') {
+                        labelText = `自訂(+${parseFloat(parts[2])}/${parseFloat(parts[3])})`;
+                        typeClass = 'add';
+                    }
+                }
+
+                // 決定標籤顏色
+                let bgColor = '#e0e0e0'; let textColor = '#333';
+                if (typeClass === 'add') { bgColor = '#ffebee'; textColor = '#d84315'; }
+                else if (typeClass === 'leave') { bgColor = '#f3e5f5'; textColor = '#7b1fa2'; }
+                
+                // 產生帶有 X 按鈕的標籤 (綁定 deleteSingleOverride)
+                return `<span style="background:${bgColor}; color:${textColor}; padding:4px 8px; border-radius:6px; margin:3px; display:inline-flex; align-items:center; font-weight:bold; font-size:0.85rem; border:1px solid ${textColor}40;">
+                            ${labelText}
+                            <span onclick="event.stopPropagation(); deleteSingleOverride(${index})" style="margin-left:6px; color:#c62828; cursor:pointer; font-size:1.2rem; line-height:0.7; font-weight:900; padding:2px;">×</span>
+                        </span>`;
+            }).join('');
+            
+            if (!labelsHtml) labelsHtml = `<span style="color:#888; font-weight:bold;">已清空當日</span>`;
+            statusDiv.innerHTML = `<div style="margin-bottom:8px; color:#888; font-weight:bold;">📝 今日已疊加設定：</div><div style="display:flex; flex-wrap:wrap; justify-content:center;">${labelsHtml}</div>`;
+        }
+    }
+
+    // 3. 顯示初始步驟
     document.getElementById('modalStep1').style.display = 'block';
     document.getElementById('modalStep2').style.display = 'none';
     document.getElementById('optionModal').classList.add('show');
+}
+
+// ★★★ 新增：刪除單一疊加設定 ★★★
+function deleteSingleOverride(index) {
+    if (!modalCurrentDateKey) return;
+    let currentVal = userOverrides[modalCurrentDateKey];
+    if (!currentVal) return;
+    
+    // 將字串拆成陣列，刪除指定的索引項目
+    let items = currentVal.split(',');
+    items.splice(index, 1);
+    
+    // 如果刪除後陣列空了，就整個清掉該日期；否則重新組裝回去
+    if (items.length === 0) {
+        delete userOverrides[modalCurrentDateKey];
+    } else {
+        userOverrides[modalCurrentDateKey] = items.join(',');
+    }
+    
+    // 背景靜默存檔並重繪底下的日曆
+    saveToCloud(true);
+    refreshCurrentPage();
+    
+    // 將字串日期 (如 2026-03-05) 轉回 Date 物件，並重新打開 Modal 以刷新上方的標籤
+    const parts = modalCurrentDateKey.split('-');
+    const refreshDate = new Date(parts[0], parseInt(parts[1]) - 1, parts[2]);
+    openModal(refreshDate);
 }
 
 function goToStep2(category) {
     modalStep1Selection = category;
     document.getElementById('modalStep1').style.display = 'none';
     document.getElementById('modalStep2').style.display = 'block';
+    
+    // 控制區塊顯示
     const container = document.getElementById('step2Options');
     container.innerHTML = '';
+    container.style.display = category === 'fully_custom' ? 'none' : 'grid'; // 自訂模式隱藏選項網格
     document.getElementById('customHourArea').style.display = 'none';
-    document.getElementById('step2Title').innerText = category === 'work' ? '上班設定' : category === 'overtime' ? '選擇加班' : category === 'comp' ? '選擇補休' : category === 'swap' ? '換班設定' : '選擇假別';
+    document.getElementById('fullyCustomArea').style.display = category === 'fully_custom' ? 'block' : 'none';
+    
+    // 設定標題
+    document.getElementById('step2Title').innerText = category === 'work' ? '上班設定' : category === 'overtime' ? '選擇加班' : category === 'comp' ? '選擇補休' : category === 'swap' ? '換班設定' : category === 'fully_custom' ? '自訂標籤與時數' : '選擇假別';
 
     if (category === 'work') {
         renderOptionBtn('正常上班 (清除)', 'base', 'work_day');
@@ -749,12 +1063,12 @@ function selectOption(btn, type, value) {
         customArea.style.display = 'block';
         label1.innerText = "加班時數:";
         standbyRow.style.display = 'block'; 
-        document.getElementById('customHourInput').value = 4; 
-        document.getElementById('customStandbyInput').value = 0;
+        document.getElementById('customHourInput').value = ''; 
+        document.getElementById('customStandbyInput').value = '';
     } else if (type === 'leave' || value === 'custom') {
         customArea.style.display = 'block';
         label1.innerText = "輸入時數:"; 
-        document.getElementById('customHourInput').value = 4; 
+        document.getElementById('customHourInput').value = ''; 
     }
 }
 
@@ -772,6 +1086,32 @@ function backToStep1() {
 }
 
 function saveOption() {
+    // ★★★ 新增：全自訂標籤的專屬存檔邏輯 ★★★
+    if (modalStep1Selection === 'fully_custom') {
+        const label = document.getElementById('fcLabel').value.trim().replace(/[,|]/g, ''); // 防呆: 過濾掉逗號與分隔符號
+        if (!label) { showToast("請輸入標籤名稱", "error"); return; }
+        
+        const type = document.getElementById('fcType').value;
+        const wk = parseFloat(document.getElementById('fcWorkHour').value) || 0;
+        const sb = parseFloat(document.getElementById('fcStandbyHour').value) || 0;
+
+        // 組裝格式： custom | add或off | 標籤名稱 | 工作時數 | 備勤時數
+        const finalValue = `custom|${type}|${label}|${wk}|${sb}`;
+        
+        // 疊加模式 (允許同一天輸入多個)
+        let currentVal = userOverrides[modalCurrentDateKey] || '';
+        if (currentVal) userOverrides[modalCurrentDateKey] = currentVal + ',' + finalValue; 
+        else userOverrides[modalCurrentDateKey] = finalValue;
+        
+        closeModalDirect();
+        refreshCurrentPage();
+        saveToCloud(true);
+        
+        // 清空輸入框準備下次輸入
+        document.getElementById('fcLabel').value = ''; 
+        return; 
+    }
+    // ★★★ 結束 ★★★
     if (!selectedOptionValue) { showToast("請選擇一個項目", "error"); return; }
     let finalValue = selectedOptionValue;
     const customArea = document.getElementById('customHourArea');
@@ -798,12 +1138,14 @@ function saveOption() {
     
     closeModalDirect();
     refreshCurrentPage();
+    saveToCloud(true);
 }
 
 function confirmModal(isClear) {
     if (isClear) delete userOverrides[modalCurrentDateKey];
     refreshCurrentPage();
     closeModalDirect();
+    saveToCloud(true);
 }
 function closeModalDirect() { document.getElementById('optionModal').classList.remove('show'); }
 function closeModal(event) { if (event.target.id === 'optionModal') closeModalDirect(); }
@@ -839,13 +1181,11 @@ function saveLeaveSettings() {
     };
     userOverrides[KEY_LEAVE_CONFIG] = JSON.stringify(limits);
     
-    if (!document.body.classList.contains('editing-mode')) saveToCloud();
-    else showToast("設定已暫存，請記得點擊「儲存並離開」", "info");
-    
     closeLeaveSettingsDirect();
-    
-    // 儲存後自動重整儀表板
     if (document.getElementById('view-stats').classList.contains('active')) calculateLeaveStats();
+
+    // ★★★ 直接執行自動存檔 (取代原本的 if 判斷) ★★★
+    saveToCloud(true);
 }
 
 function closeLeaveSettingsDirect() { document.getElementById('leaveSettingsModal').classList.remove('show'); }
@@ -1157,28 +1497,6 @@ function closeImageModalDirect() {
     currentViewingRosterKey = null; 
 }
 
-// =========== 導航與模式 ===========
-function setAppMode(isEditing) {
-    READ_ONLY_MODE = !isEditing;
-    const menuBtn = document.getElementById('menuEditBtn');
-    const inputR = document.getElementById('inputReserved');
-    if (inputR) { inputR.disabled = !isEditing; inputR.style.backgroundColor = isEditing ? 'white' : '#f0f0f0'; }
-    if (isEditing) {
-        if(menuBtn) { menuBtn.innerHTML = "💾 儲存並離開"; menuBtn.classList.add('saving'); }
-        document.body.classList.add('editing-mode');
-    } else {
-        if(menuBtn) { menuBtn.innerHTML = "🔧 修改班表"; menuBtn.classList.remove('saving'); }
-        document.body.classList.remove('editing-mode');
-    }
-}
-
-function toggleEditMode() {
-    const menu = document.getElementById('userDropdown');
-    if(menu) menu.classList.remove('show');
-    if (READ_ONLY_MODE) { setAppMode(true); showToast("已進入修改模式\n完成後請點選「儲存並離開」", "info"); }
-    else { saveToCloud(); }
-}
-
 function switchTab(tabName) {
     const tabs = document.querySelectorAll('.tab-btn');
     const sections = document.querySelectorAll('.view-section');
@@ -1211,3 +1529,481 @@ calendarContainer.addEventListener('touchend', function(e) {
 
 jumpToToday();
 checkAuth();
+
+// =========== PWA 安裝與引導邏輯 ===========
+let deferredPrompt;
+
+// 偷偷攔截 Android 的原生安裝事件
+window.addEventListener('beforeinstallprompt', (e) => {
+    e.preventDefault(); // 阻止系統自己隨便亂彈
+    deferredPrompt = e; // 把權限存起來，等我們按按鈕時再用
+});
+
+function handleInstallApp() {
+    // 檢查是不是「已經在 App 模式內」執行了
+    const isInStandaloneMode = ('standalone' in window.navigator) && (window.navigator.standalone) || window.matchMedia('(display-mode: standalone)').matches;
+    
+    if (isInStandaloneMode) {
+        showToast("您現在已經在使用 App 版本囉！", "success");
+        return;
+    }
+
+    // 情況 1：安卓系統 (攔截到權限了，直接啟動全自動安裝！)
+    if (deferredPrompt) {
+        deferredPrompt.prompt();
+        deferredPrompt.userChoice.then((choiceResult) => {
+            deferredPrompt = null; // 權限只能用一次，用完清空
+        });
+    } 
+    // 情況 2：蘋果系統 (Apple 死都不給權限，只能跳出圖文教學)
+    else {
+        const userAgent = window.navigator.userAgent.toLowerCase();
+        if (/iphone|ipad|ipod/.test(userAgent)) {
+            document.getElementById('iosInstallGuide').classList.add('show');
+        } else {
+            // 情況 3：其他未知的電腦瀏覽器
+            showToast("請使用瀏覽器的選單將本頁「加入主畫面」", "info");
+        }
+    }
+}
+
+// 關閉 iOS 教學視窗的輔助函式
+function closeIosGuideDirect() { document.getElementById('iosInstallGuide').classList.remove('show'); }
+function closeIosGuide(e) { if (e.target.id === 'iosInstallGuide') closeIosGuideDirect(); }
+
+// =========== 下拉更新 (Pull-to-Refresh) 邏輯 ===========
+const ptrContainer = document.getElementById('pullToRefresh');
+const ptrSpinner = ptrContainer ? ptrContainer.querySelector('.spinner') : null;
+
+if (ptrContainer && ptrSpinner) {
+    let ptrStart = 0;
+    let isPullingDown = false;
+
+    // 1. 手指碰觸螢幕
+    document.addEventListener('touchstart', (e) => {
+        const hasOpenModal = document.querySelector('.modal-overlay.show');
+        if (window.scrollY === 0 && !hasOpenModal) {
+            ptrStart = e.touches[0].clientY;
+            isPullingDown = true;
+            ptrContainer.style.transition = 'none'; 
+            ptrSpinner.classList.remove('refreshing');
+        }
+    }, { passive: true });
+
+    // 2. 手指滑動中
+    document.addEventListener('touchmove', (e) => {
+        if (!isPullingDown) return;
+        
+        let currentY = e.touches[0].clientY;
+        let pullDistance = currentY - ptrStart;
+        
+        if (pullDistance > 0 && window.scrollY === 0) {
+            if (e.cancelable) e.preventDefault(); 
+            
+            // ★ 修改1：增加阻力 (從 2.5 改為 3.5)，必須滑動更長的手指距離，圖示才會拉下來
+            let visualDistance = pullDistance / 3.5; 
+            if (visualDistance > 90) visualDistance = 90; 
+            
+            ptrContainer.style.top = (visualDistance - 70) + 'px'; 
+            ptrSpinner.style.transform = `rotate(${pullDistance}deg)`; 
+        } else {
+            isPullingDown = false;
+        }
+    }, { passive: false });
+
+    // 3. 手指離開螢幕
+    document.addEventListener('touchend', (e) => {
+        if (!isPullingDown) return;
+        isPullingDown = false;
+        
+        let currentY = e.changedTouches[0].clientY;
+        let pullDistance = currentY - ptrStart;
+        
+        // 同樣套用新的阻力公式
+        let visualDistance = pullDistance / 3.5;
+        
+        ptrContainer.style.transition = 'top 0.3s ease'; 
+        
+        // ★ 修改2：提高觸發門檻 (從 55 提高到 70)
+        // 代表使用者必須很刻意地往下「深拉」，才能觸發更新
+        if (visualDistance > 70) {
+            ptrContainer.style.top = '20px'; // 讓圈圈懸停在畫面頂端
+            ptrSpinner.classList.add('refreshing'); // 開始轉動
+            
+            // ★ 修改3：延長等待時間 (從 600ms 延長到 1200ms)
+            // 讓使用者看清楚旋轉動畫，維持一段時間後再重載網頁
+            setTimeout(() => { 
+                location.reload(); 
+            }, 1200);
+        } else {
+            // 沒拉到位，彈回隱藏狀態 (防誤觸成功)
+            ptrContainer.style.top = '-70px'; 
+        }
+    });
+}
+
+// =========== 複製分享網址邏輯 ===========
+function copyShareUrl() {
+    // 取得目前的完整網址
+    const currentUrl = window.location.href;
+    
+    // 使用現代瀏覽器的 Clipboard API (適用於大部分手機與新版瀏覽器)
+    if (navigator.clipboard && window.isSecureContext) {
+        navigator.clipboard.writeText(currentUrl).then(() => {
+            showToast("✅ 網址已複製！快去貼給同事吧", "success");
+        }).catch(err => {
+            showToast("❌ 複製失敗，請手動複製", "error");
+        });
+    } else {
+        // 備用方案：針對舊版瀏覽器或非安全連線環境
+        let textArea = document.createElement("textarea");
+        textArea.value = currentUrl;
+        // 將輸入框藏在畫面外，避免畫面跳動
+        textArea.style.position = "fixed";
+        textArea.style.left = "-999999px";
+        textArea.style.top = "-999999px";
+        document.body.appendChild(textArea);
+        textArea.focus();
+        textArea.select();
+        
+        try {
+            document.execCommand('copy');
+            showToast("✅ 網址已複製！快去貼給同事吧", "success");
+        } catch (err) {
+            showToast("❌ 複製失敗，請手動複製", "error");
+        }
+        
+        textArea.remove(); // 複製完後刪除隱藏的輸入框
+    }
+}
+
+// =========== 年度班表總覽邏輯 ===========
+let currentAnnualYear = new Date().getFullYear();
+
+function openAnnualModal() {
+    currentAnnualYear = new Date().getFullYear();
+    renderAnnualCalendar();
+    document.getElementById('annualModal').classList.add('show');
+}
+
+function closeAnnualModalDirect() { document.getElementById('annualModal').classList.remove('show'); }
+function closeAnnualModal(e) { if (e.target.id === 'annualModal') closeAnnualModalDirect(); }
+
+function changeAnnualYear(delta) {
+    currentAnnualYear += delta;
+    const container = document.getElementById('annualCalendarContainer');
+    container.innerHTML = '<div style="text-align:center; padding:50px; color:#999; font-weight:bold; font-size:1.2rem;">產生中...</div>';
+    
+    // 微小延遲讓畫面先更新出「產生中」的字樣
+    setTimeout(() => {
+        renderAnnualCalendar();
+    }, 50);
+}
+
+// =========== 極簡蘋果風：年度班表渲染邏輯 ===========
+function renderAnnualCalendar() {
+    // 同步更新標題
+    document.getElementById('annualYearTitle').innerText = `${currentAnnualYear} 年度`;
+    document.getElementById('exportYearTitle').innerText = `${currentAnnualYear}年`;
+    
+    const container = document.getElementById('annualCalendarContainer');
+    container.innerHTML = '';
+    
+    // 一口氣產生 12 個月
+    for (let month = 0; month < 12; month++) {
+        const monthDiv = document.createElement('div');
+        monthDiv.style.display = 'flex';
+        monthDiv.style.flexDirection = 'column';
+        
+        // 幾月標題
+        const title = document.createElement('div');
+        title.style.fontSize = '1.8rem';
+        title.style.fontWeight = 'bold';
+        title.style.color = '#fff';
+        title.style.marginBottom = '15px';
+        title.style.paddingLeft = '5px';
+        title.innerText = `${month + 1}月`;
+        monthDiv.appendChild(title);
+        
+        // 數字網格 (7欄)
+        const grid = document.createElement('div');
+        grid.style.display = 'grid';
+        grid.style.gridTemplateColumns = 'repeat(7, 1fr)';
+        grid.style.gap = '10px 5px';
+        
+        const firstDay = new Date(currentAnnualYear, month, 1).getDay();
+        const daysInMonth = new Date(currentAnnualYear, month + 1, 0).getDate();
+        
+        // 填補月初的空白天數
+        for(let i = 0; i < firstDay; i++) {
+            const empty = document.createElement('div');
+            grid.appendChild(empty);
+        }
+        
+        // 產生每一天的數字
+        for(let d = 1; d <= daysInMonth; d++) {
+            const cell = document.createElement('div');
+            cell.style.fontSize = '1.35rem';
+            cell.style.fontWeight = '800';
+            cell.style.textAlign = 'center';
+            cell.style.padding = '5px 0';
+            cell.innerText = d;
+            
+            // 判斷上班或休假
+            const date = new Date(currentAnnualYear, month, d);
+            const baseInfo = getDayInfo(date);
+            let isWork = baseInfo.isWork;
+            
+            // 疊加判斷：如果當天有手動請假，轉為綠色(休假)；如果加了自訂班，轉為紅色(上班)
+            const dateKey = formatDateKey(date);
+            const overrideStr = userOverrides[dateKey];
+            if (overrideStr) {
+               if (overrideStr.includes('leave') || overrideStr.includes('off') || overrideStr.includes('comp')) {
+                   isWork = false;
+               } else if (overrideStr.includes('add')) {
+                   isWork = true;
+               }
+            }
+            
+            // 蘋果風格上色
+            if (isWork) {
+                cell.style.color = '#ff453a'; // iOS 紅色 (上班)
+            } else {
+                cell.style.color = '#32d74b'; // iOS 綠色 (休假)
+            }
+            
+            grid.appendChild(cell);
+        }
+        
+        monthDiv.appendChild(grid);
+        container.appendChild(monthDiv);
+    }
+}
+
+// =========== 修正版：產生並下載全年度 1~12 月完整照片 ===========
+function downloadAnnualImage() {
+    const wrapper = document.getElementById('annualExportWrapper');
+    const scrollArea = document.getElementById('annualScrollArea');
+    if (!wrapper || !scrollArea) return;
+
+    showToast("📸 正在生成全年度高畫質照片，請稍候...", "info");
+
+    // 1. 暫存原本的樣式
+    const originalScrollOverflow = scrollArea.style.overflow;
+    const originalScrollHeight = scrollArea.style.height;
+
+    // 2. 臨時把滾動區高度解鎖，讓 1~12 月完全展開（畫面會瞬間變長以供拍照）
+    scrollArea.style.overflow = 'visible';
+    scrollArea.style.height = 'auto';
+
+    // 延遲 300ms 確保 DOM 完成重繪與展開
+    setTimeout(() => {
+        html2canvas(wrapper, {
+            backgroundColor: "#000000", // 確保背景為極簡黑色
+            scale: 2,                   // 視網膜等級高畫質
+            useCORS: true,
+            windowWidth: 1200,          // 確保完整拉寬畫布
+            scrollY: 0,
+            scrollX: 0
+        }).then(canvas => {
+            // 3. 拍照完成，立刻將樣式恢復原狀（使用者完全感覺不到變動）
+            scrollArea.style.overflow = originalScrollOverflow;
+            scrollArea.style.height = originalScrollHeight;
+
+            // 4. 觸發下載照片
+            const link = document.createElement('a');
+            link.download = `${currentAnnualYear}年_全年度專屬班表.png`;
+            link.href = canvas.toDataURL('image/png');
+            link.click();
+
+            showToast("✅ 全年度 1~12 月照片已成功儲存！", "success");
+        }).catch(err => {
+            // 發生例外時也要恢復樣式
+            scrollArea.style.overflow = originalScrollOverflow;
+            scrollArea.style.height = originalScrollHeight;
+            showToast("❌ 圖片生成失敗", "error");
+        });
+    }, 300);
+}
+
+// =========== 蘋果 iOS 終極破解版：全年度班表照片生成引擎 ===========
+function downloadAnnualImage() {
+    showToast("📸 正在生成全年度高畫質照片，請稍候...", "info");
+
+    // 1. 確保年度資料是最新的
+    if (typeof currentAnnualYear === 'undefined') {
+        currentAnnualYear = new Date().getFullYear();
+    }
+    renderAnnualCalendar();
+
+    // 2. 給予系統一點時間排版
+    setTimeout(() => {
+        const originalWrapper = document.getElementById('annualExportWrapper');
+        if (!originalWrapper) {
+            showToast("❌ 找不到年度班表元素", "error");
+            return;
+        }
+
+        const clone = originalWrapper.cloneNode(true);
+        
+        // 3. 建立一個透明的隱藏圖層，專門用來讓系統拍照 (繞過畫面捲動限制)
+        const tempContainer = document.createElement('div');
+        tempContainer.style.position = 'fixed';
+        tempContainer.style.top = '0';
+        tempContainer.style.left = '0';
+        tempContainer.style.width = '1000px';
+        tempContainer.style.height = 'auto';
+        tempContainer.style.zIndex = '-9999';
+        tempContainer.style.opacity = '0'; // 隱藏起來但不影響渲染
+        tempContainer.style.pointerEvents = 'none';
+        
+        tempContainer.appendChild(clone);
+        document.body.appendChild(tempContainer);
+
+        // 4. 開始拍照
+        html2canvas(clone, {
+            backgroundColor: "#000000",
+            scale: 1.5, // 視網膜畫質
+            useCORS: true,
+            windowWidth: 1000
+        }).then(canvas => {
+            document.body.removeChild(tempContainer);
+            
+            // 轉換成 JPG 圖片
+            const imgData = canvas.toDataURL('image/jpeg', 0.9);
+            
+            // 5. 呼叫專屬的「預覽儲存視窗」
+            showImagePreviewModal(imgData);
+            showToast("✅ 照片生成完畢！", "success");
+
+        }).catch(err => {
+            document.body.removeChild(tempContainer);
+            showToast("❌ 圖片生成失敗", "error");
+        });
+    }, 500);
+}
+
+// =========== 專屬預覽儲存視窗 (完美解決 iOS 阻擋下載的問題) ===========
+function showImagePreviewModal(imgData) {
+    let modal = document.getElementById('capturePreviewModal');
+    
+    // 如果視窗還沒建立過，就動態產生一個
+    if (!modal) {
+        modal = document.createElement('div');
+        modal.id = 'capturePreviewModal';
+        modal.className = 'modal-overlay';
+        modal.style.zIndex = '20000'; // 確保在最上層
+        modal.innerHTML = `
+            <div class="modal-content" style="max-width: 95%; width: 500px; height: 90vh; display: flex; flex-direction: column; background: #1c1c1e; padding: 10px; border-radius: 15px;">
+                <div style="display: flex; justify-content: space-between; align-items: center; padding: 10px 5px 15px 5px;">
+                    <div style="color: #32d74b; font-weight: 900; font-size: 1.1rem; display: flex; align-items: center; gap: 8px;">
+                        <span>✅</span> 請長按下方圖片來儲存
+                    </div>
+                    <button onclick="document.getElementById('capturePreviewModal').classList.remove('show')" style="background: #3a3a3c; color: white; border: none; border-radius: 50%; width: 35px; height: 35px; font-size: 1.2rem; cursor: pointer; display: flex; justify-content: center; align-items: center;">✕</button>
+                </div>
+                <div style="flex: 1; overflow-y: auto; border-radius: 8px; border: 1px solid #333; background: #000;">
+                    <!-- 加上 webkit-touch-callout 確保蘋果手機可以長按喚出選單 -->
+                    <img id="capturePreviewImg" src="" style="width: 100%; height: auto; display: block; user-select: auto; -webkit-touch-callout: default; pointer-events: auto;">
+                </div>
+            </div>
+        `;
+        document.body.appendChild(modal);
+    }
+    
+    // 將剛剛拍好的照片塞進視窗中
+    const imgEl = document.getElementById('capturePreviewImg');
+    imgEl.src = imgData;
+    
+    // 顯示視窗
+    modal.classList.add('show');
+}
+
+// =========== 區間工時計算機邏輯 ===========
+function calculateRangeHours() {
+    const startInput = document.getElementById('rangeStart').value;
+    const endInput = document.getElementById('rangeEnd').value;
+    const resultDiv = document.getElementById('rangeResult');
+    
+    if (!startInput || !endInput) {
+        showToast("請選擇開始與結束日期！", "error");
+        return;
+    }
+    
+    let startDate = new Date(startInput);
+    let endDate = new Date(endInput);
+    
+    // 將時間設為午夜，避免跨時區造成的誤差
+    startDate.setHours(0, 0, 0, 0);
+    endDate.setHours(0, 0, 0, 0);
+    
+    if (startDate > endDate) {
+        showToast("結束日期不能早於開始日期！", "error");
+        return;
+    }
+    
+    // 限制最大計算範圍為 366 天，避免不小心選錯年份導致手機當機
+    const diffTime = Math.abs(endDate - startDate);
+    const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24)); 
+    if (diffDays > 366) {
+        showToast("計算區間請勿超過一年！", "error");
+        return;
+    }
+    
+    // 初始化統計數據
+    let totalNormal = 0;
+    let totalOvertime = 0;
+    let totalStandby = 0;
+    let totalWorkDays = 0;
+    
+    let currentDate = new Date(startDate);
+    
+    // 每一天逐日掃描 (完全套用日曆介面的底層運算引擎)
+    while (currentDate <= endDate) {
+        const dateKey = formatDateKey(currentDate);
+        const overrideString = userOverrides[dateKey];
+        const dayInfo = getDayInfo(currentDate);
+        
+        if (dayInfo) {
+            // stats 裡面會自動扣除請假/補休，加上加班時數
+            const stats = calculateDayStats(dayInfo, overrideString);
+            
+            // 只要當天還有剩下正常時數或加班時數，就判定為「有服勤」
+            if (stats.normal > 0 || stats.overtime > 0) totalWorkDays++;
+            
+            totalNormal += stats.normal;
+            totalOvertime += stats.overtime;
+            totalStandby += stats.sb;
+        }
+        
+        // 日期加 1 天
+        currentDate.setDate(currentDate.getDate() + 1);
+    }
+    
+    const totalHours = totalNormal + totalOvertime + totalStandby;
+    
+    // 將結果漂亮地印在畫面上
+    resultDiv.style.display = 'block';
+    resultDiv.innerHTML = `
+        <div style="display: grid; grid-template-columns: repeat(4, 1fr); gap: 5px; text-align: center;">
+            <div style="background: white; padding: 5px; border-radius: 6px; border: 1px solid #eee;">
+                <div style="font-size: 0.7rem; color: #888;">總上班日</div>
+                <div style="font-weight: bold; color: #333; font-size: 1rem;">${totalWorkDays} <small style="font-size: 0.7rem; font-weight: normal;">天</small></div>
+            </div>
+            <div style="background: white; padding: 5px; border-radius: 6px; border: 1px solid #eee;">
+                <div style="font-size: 0.7rem; color: #888;">正常時數</div>
+                <div style="font-weight: bold; color: #1976d2; font-size: 1rem;">${totalNormal} <small style="font-size: 0.7rem; font-weight: normal;">h</small></div>
+            </div>
+            <div style="background: white; padding: 5px; border-radius: 6px; border: 1px solid #eee;">
+                <div style="font-size: 0.7rem; color: #888;">加班時數</div>
+                <div style="font-weight: bold; color: #d84315; font-size: 1rem;">${totalOvertime} <small style="font-size: 0.7rem; font-weight: normal;">h</small></div>
+            </div>
+            <div style="background: white; padding: 5px; border-radius: 6px; border: 1px solid #eee;">
+                <div style="font-size: 0.7rem; color: #888;">備勤時數</div>
+                <div style="font-weight: bold; color: #666; font-size: 1rem;">${totalStandby} <small style="font-size: 0.7rem; font-weight: normal;">h</small></div>
+            </div>
+        </div>
+        <div style="margin-top: 10px; text-align: center; background: #fff3e0; padding: 8px; border-radius: 6px; color: #e65100; font-weight: 900; font-size: 1.15rem; border: 1px solid #ffe0b2;">
+            🚀 總計在勤時間：${totalHours} 小時
+        </div>
+    `;
+}

@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>排班系統</title>
+    <title>班表系統</title>
     
     <meta name="apple-mobile-web-app-capable" content="yes">
     
@@ -15,8 +15,15 @@
     
     <link rel="manifest" href="manifest.json">
     <link rel="stylesheet" href="style.css">
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
 </head>
 <body>
+
+    <div id="pullToRefresh">
+        <div class="spinner">🔄</div>
+    </div>
+    
+    <div class="app-container">
 
     <div id="loadingOverlay" class="loading-overlay">
         <div class="spinner"></div>
@@ -25,7 +32,7 @@
 
     <div id="authModal" class="auth-overlay">
         <div class="auth-box">
-            <h2 id="authTitle">歡迎使用排班系統</h2>
+            <h2 id="authTitle">歡迎使用班表系統</h2>
             <div class="auth-tabs">
                 <button class="auth-tab active" onclick="switchAuthMode('login')">登入</button>
                 <button class="auth-tab" onclick="switchAuthMode('register')">註冊</button>
@@ -82,9 +89,6 @@
                     <span class="dropdown-arrow">▼</span>
                 </div>
                 <div id="userDropdown" class="user-dropdown">
-                    <button class="menu-item" id="menuEditBtn" onclick="toggleEditMode()">
-                        🔧 修改班表
-                    </button>
                     <button class="menu-item" onclick="openSetupModal()">
                         🏛️ 班表初始設定
                     </button>
@@ -106,15 +110,17 @@
             <button class="exit-view-btn" onclick="exitViewMode()">返回我的班表</button>
         </div>
 
+        <!-- 快速連結與按鈕 -->
         <div class="quick-links">
             <button class="month-btn long-btn" onclick="jumpToToday()">
                 📍 回到今天
             </button>
-            
-            <button class="month-btn long-btn refresh-btn" onclick="location.reload()">
-                🔄 重新整理
+
+            <!-- ★★★ 修改：主頁的「下載全年度班表」按鈕 ★★★ -->
+            <button class="month-btn long-btn" onclick="downloadAnnualImage()" style="background-color: #f3e5f5; color: #7b1fa2; border-color: #e1bee7;">
+                📸 下載年度班表
             </button>
-        </div>
+
         
         <div class="tab-group">
             <button class="tab-btn active" onclick="switchTab('calendar')">📅 班表預覽</button>
@@ -132,6 +138,25 @@
                 <h3 style="margin: 0 0 10px 5px; color: #555;">
                     <span id="statsYearDisplay">2026</span> 年度休假概況
                 </h3>
+
+                <!-- ★★★ 新增：區間工時計算機 ★★★ -->
+                <div class="leave-card" style="flex-direction: column; align-items: stretch; background: #fffde7; border-color: #fff59d; margin-bottom: 12px; cursor: default;">
+                    <div style="font-weight: bold; color: #f57f17; margin-bottom: 10px; display:flex; align-items:center; gap:5px; font-size: 1.05rem;">
+                        <span>⏱️</span> 區間工時計算機
+                    </div>
+                    <div style="display: flex; gap: 8px; align-items: center; margin-bottom: 10px;">
+                        <input type="date" id="rangeStart" class="modern-date-input" style="flex: 1; padding: 6px; font-size: 0.9rem; border: 1px solid #ccc; background: white; border-radius: 6px;">
+                        <span style="color: #666; font-weight: bold; font-size: 0.9rem;">至</span>
+                        <input type="date" id="rangeEnd" class="modern-date-input" style="flex: 1; padding: 6px; font-size: 0.9rem; border: 1px solid #ccc; background: white; border-radius: 6px;">
+                    </div>
+                    <button onclick="calculateRangeHours()" class="btn-primary full-width" style="margin-top: 0; background: #f57f17; padding: 10px; border-radius: 8px; font-size: 1rem; box-shadow: 0 2px 5px rgba(245, 127, 23, 0.3);">
+                        開始計算
+                    </button>
+                    
+                    <div id="rangeResult" style="display:none; margin-top: 15px; padding-top: 12px; border-top: 1px dashed #fbc02d;">
+                        <!-- 結果將由 JS 自動填入 -->
+                    </div>
+                </div>
 
                 <div id="leaveCardsContainer" class="leave-grid">
                     </div>
@@ -206,12 +231,17 @@
             </div>
             
             <div id="modalStep1" class="modal-step">
+                <div id="currentDayStatus" style="background: #f8f9fa; padding: 12px; border-radius: 8px; margin-bottom: 15px; font-size: 0.9rem; color: #555; text-align: center; border: 1px dashed #ccc; line-height: 1.5;">
+                    載入中...
+                </div>
+
                 <div class="category-grid">
                     <button class="cat-btn work" onclick="goToStep2('work')">💼 上班/調整</button>
                     <button class="cat-btn overtime" onclick="goToStep2('overtime')">🔥 加班</button>
                     <button class="cat-btn comp" onclick="goToStep2('comp')">🌙 補休</button>
                     <button class="cat-btn leave" onclick="goToStep2('leave')">🏖️ 請假</button>
-                    <button class="cat-btn swap" onclick="goToStep2('swap')" style="grid-column: 1 / -1;">🔄 換班</button>
+                    <button class="cat-btn swap" onclick="goToStep2('swap')">🔄 換班</button>
+                    <button class="cat-btn custom" onclick="goToStep2('fully_custom')">📝 自訂標籤</button>
                 </div>
                 <button class="btn-secondary full-width" onclick="confirmModal(true)">🗑️ 清除當日設定</button>
             </div>
@@ -220,30 +250,56 @@
                 <button class="back-link" onclick="backToStep1()">❮ 返回類別</button>
                 <h4 id="step2Title">選擇項目</h4>
                 
-                <div id="step2Options" class="options-grid">
-                    </div>
+                <div id="step2Options" class="options-grid"></div>
 
-                    <div id="customHourArea" class="custom-hour-area" style="display:none;">
-                    
-                        <div class="input-row">
-                            <label id="customLabel1">輸入時數:</label>
-                            <div class="hour-input-wrapper">
-                                <button onclick="adjustHour('customHourInput', -1)">-</button>
-                                <input type="number" id="customHourInput" value="1" min="0" max="24">
-                                <button onclick="adjustHour('customHourInput', 1)">+</button>
-                            </div>
+                <div id="customHourArea" class="custom-hour-area" style="display:none;">
+                    <div class="input-row">
+                        <label id="customLabel1">輸入時數:</label>
+                        <div class="hour-input-wrapper">
+                            <button onclick="adjustHour('customHourInput', -1)">-</button>
+                            <input type="number" id="customHourInput" placeholder="0" inputmode="decimal" min="0" max="24">
+                            <button onclick="adjustHour('customHourInput', 1)">+</button>
                         </div>
-    
-                        <div id="standbyInputRow" class="input-row" style="display:none; margin-top:10px; border-top:1px dashed #ddd; padding-top:10px;">
-                            <label>備勤時數:</label>
-                            <div class="hour-input-wrapper">
-                                <button onclick="adjustHour('customStandbyInput', -1)">-</button>
-                                <input type="number" id="customStandbyInput" value="0" min="0" max="24">
-                                <button onclick="adjustHour('customStandbyInput', 1)">+</button>
-                            </div>
-                        </div>
-    
                     </div>
+                    <div id="standbyInputRow" class="input-row" style="display:none; margin-top:10px; border-top:1px dashed #ddd; padding-top:10px;">
+                        <label>備勤時數:</label>
+                        <div class="hour-input-wrapper">
+                            <button onclick="adjustHour('customStandbyInput', -1)">-</button>
+                            <input type="number" id="customStandbyInput" placeholder="0" inputmode="decimal" min="0" max="24">
+                            <button onclick="adjustHour('customStandbyInput', 1)">+</button>
+                        </div>
+                    </div>
+                </div>
+
+                <div id="fullyCustomArea" class="custom-hour-area" style="display:none; background: #f0f4f8; padding: 15px; border-radius: 10px;">
+                    <div class="input-row" style="margin-bottom: 12px; text-align: left;">
+                        <label style="display:block; margin-bottom:5px; font-weight:bold; color:#455a64;">自訂標題 (顯示在班表上):</label>
+                        <input type="search" id="fcLabel" name="custom_label_no_autofill" autocomplete="off" autocorrect="off" spellcheck="false" placeholder="例如: 開會, 出差, 支援..." style="width:100%; padding:10px; border-radius:8px; border:1px solid #ccc; font-size:1rem; -webkit-appearance: none; appearance: none;">
+                    </div>
+                    <div class="input-row" style="margin-bottom: 15px; text-align: left;">
+                        <label style="display:block; margin-bottom:5px; font-weight:bold; color:#455a64;">計算類型:</label>
+                        <select id="fcType" style="width:100%; padding:10px; border-radius:8px; border:1px solid #ccc; font-size:1rem; background:white;">
+                            <option value="add">➕ 增加時數 (算入加班)</option>
+                            <option value="off">➖ 扣除時數 (算入請假)</option>
+                        </select>
+                    </div>
+                    <div class="input-row" style="display: flex; justify-content: space-between; align-items: center;">
+                        <label style="font-weight:bold; color:#455a64;">正班/加班 時數:</label>
+                        <div class="hour-input-wrapper" style="margin:0;">
+                            <button onclick="adjustHour('fcWorkHour', -1)">-</button>
+                            <input type="number" id="fcWorkHour" placeholder="0" inputmode="decimal" min="0" max="24">
+                            <button onclick="adjustHour('fcWorkHour', 1)">+</button>
+                        </div>
+                    </div>
+                    <div class="input-row" style="display: flex; justify-content: space-between; align-items: center; margin-top:10px;">
+                        <label style="font-weight:bold; color:#455a64;">備勤時數:</label>
+                        <div class="hour-input-wrapper" style="margin:0;">
+                            <button onclick="adjustHour('fcStandbyHour', -1)">-</button>
+                            <input type="number" id="fcStandbyHour" placeholder="0" inputmode="decimal" min="0" max="24">
+                            <button onclick="adjustHour('fcStandbyHour', 1)">+</button>
+                        </div>
+                    </div>
+                </div>
 
                 <button class="btn-primary full-width" onclick="saveOption()">確定</button>
             </div>
@@ -326,16 +382,43 @@
                 <button type="button" class="close-btn-simple" onclick="closeSetupModal()">✕</button>
             </div>
             <div class="settings-body">
-                <p class="hint-text">請設定您的單位與六日一輪的起始日，系統將為您量身打造專屬班表。</p>
+                <p class="hint-text">請選擇第一個上班日，系統將為您量身打造專屬班表。</p>
                 <div class="form-group">
                     <label>服務單位名稱</label>
                     <input type="text" id="setupUnit" placeholder="例如: 花蓮監獄" style="width:100%; padding:8px; border-radius:6px; border:1px solid #ddd; background:#f9f9f9;">
                 </div>
                 
                 <div class="form-group">
+                    <label>您的所屬組別</label>
+                    <select id="setupGroup" style="width:100%; padding:8px; border-radius:6px; border:1px solid #ddd; background:#f9f9f9; margin-top:5px;" onchange="updatePartnerOptions()">
+                        <option value="甲1">甲1</option>
+                        <option value="甲2">甲2</option>
+                        <option value="甲3">甲3</option>
+                        <option value="乙1">乙1</option>
+                        <option value="乙2">乙2</option>
+                        <option value="乙3">乙3</option>
+                    </select>
+                </div>
+
+                <div class="form-group">
+                    <label>班表循環規律</label>
+                    <select id="setupCycle" style="width:100%; padding:8px; border-radius:6px; border:1px solid #ddd; background:#f9f9f9; margin-top:5px;">
+                        <option value="6">勤一休一 勤一休三 (6天一輪)</option>
+                        <option value="9">勤一休一 勤一休一 勤一休四 (9天一輪)</option>
+                    </select>
+                </div>
+
+                <div class="form-group">
                     <label style="color: #d84315; font-weight: bold;">請選擇六日一輪中的「第一個上班日」</label>
                     <input type="date" id="setupDate" class="modern-date-input" style="width:100%; border:1px solid #ddd; padding:8px; border-radius:6px; background:#f9f9f9; margin-top:5px;">
                 </div>
+
+                <div class="form-group">
+                    <label>該上班日與您 <span style="color:#1976d2; font-weight:bold;">搭班的夥伴</span> 為：</label>
+                    <select id="setupPartner" style="width:100%; padding:8px; border-radius:6px; border:1px solid #ddd; background:#f9f9f9; margin-top:5px;">
+                        </select>
+                </div>
+
                 <div class="form-group">
                     <label>該上班日您的班別為：</label>
                     <select id="setupShiftType" style="width:100%; padding:8px; border-radius:6px; border:1px solid #ddd; background:#f9f9f9; margin-top:5px;">
@@ -350,6 +433,79 @@
         </div>
     </div>
 
+    <div id="leaveDetailModal" class="modal-overlay" onclick="closeLeaveDetail(event)" style="z-index: 10006;">
+        <div class="modal-content" style="max-width: 320px; width: 90%; padding: 15px;">
+            <div class="modal-header-simple" style="margin-bottom: 10px; border-bottom: 2px solid #1976d2; padding-bottom: 10px;">
+                <h3 id="leaveDetailTitle" style="font-size:1.15rem; color:#333; margin:0;">休假明細</h3>
+                <button type="button" class="close-btn-simple" onclick="closeLeaveDetailDirect()">✕</button>
+            </div>
+            <div id="leaveDetailList" style="max-height: 60vh; overflow-y: auto;">
+                </div>
+        </div>
+    </div>
+
+    <div id="iosInstallGuide" class="modal-overlay" onclick="closeIosGuide(event)" style="z-index: 10008;">
+        <div class="modal-content" style="max-width: 320px; padding: 25px 20px; text-align: center; border-radius: 20px;">
+            <h3 style="margin-bottom: 15px; color: #333;">在 iPhone 上安裝</h3>
+            <p style="font-size: 0.95rem; color: #555; line-height: 1.6; margin-bottom: 20px;">
+                Apple 限制自動安裝功能。<br>請跟著以下兩個步驟即可完成：
+            </p>
+            <div style="background: #f8f9fa; padding: 15px; border-radius: 12px; text-align: left; margin-bottom: 20px;">
+                <p style="margin: 5px 0;">1. 點擊畫面正下方的 <b style="color:#007aff; font-size:1.2rem;">⍐ 分享</b></p>
+                <p style="margin: 15px 0 5px 0;">2. 往下滑，點選 <b style="color:#333; font-size:1.1rem;">➕ 加入主畫面</b></p>
+            </div>
+            <button class="btn-primary full-width" onclick="closeIosGuideDirect()">我知道了</button>
+        </div>
+    </div>
+    
     <script src="script.js"></script>
+
+    <!-- ★★★ 修改：全景年度班表 Modal (iOS 質感黑底版 + 拍照功能) ★★★ -->
+    <div id="annualModal" class="modal-overlay" onclick="closeAnnualModal(event)" style="z-index: 10010;">
+        <div class="modal-content" style="max-width: 98%; width: 100%; height: 95vh; display: flex; flex-direction: column; padding: 0; background: #1c1c1e; border-radius: 12px; overflow: hidden;">
+            
+            <!-- 頂部操作列 (深色) -->
+            <div class="modal-header-simple" style="padding: 15px; flex-shrink: 0; position: relative; z-index: 2; background: #2c2c2e; border-bottom: 1px solid #38383a;">
+                <h3 style="margin:0; display:flex; align-items:center; gap:15px; justify-content: center; width: 100%;">
+                    <button onclick="changeAnnualYear(-1)" style="border:none; background:#3a3a3c; color:#0a84ff; padding:8px 15px; border-radius:8px; cursor:pointer; font-weight:bold; font-size:1.1rem;">◀</button>
+                    <span id="annualYearTitle" style="color:#fff; font-size: 1.2rem; font-weight:900;">2026 年度</span>
+                    <button onclick="changeAnnualYear(1)" style="border:none; background:#3a3a3c; color:#0a84ff; padding:8px 15px; border-radius:8px; cursor:pointer; font-weight:bold; font-size:1.1rem;">▶</button>
+                </h3>
+                <button type="button" class="close-btn-simple" onclick="closeAnnualModalDirect()" style="position: absolute; right: 10px; top: 10px; background: #3a3a3c; color: #fff; border-radius: 50%;">✕</button>
+            </div>
+
+            <!-- ★★★ 新增：儲存為圖片按鈕 ★★★ -->
+            <div style="background: #1c1c1e; padding: 12px; text-align: center;">
+                <button onclick="downloadAnnualImage()" style="background: #0a84ff; color: white; border: none; padding: 12px 25px; border-radius: 30px; font-weight: 900; font-size: 1.1rem; cursor: pointer; box-shadow: 0 4px 10px rgba(10, 132, 255, 0.3);">
+                    📸 一鍵儲存為照片
+                </button>
+            </div>
+
+            <!-- 畫布滾動區 -->
+            <div id="annualScrollArea" style="flex:1; overflow:auto; background:#000; overscroll-behavior: contain; -webkit-overflow-scrolling: touch; display: flex; justify-content: center; padding: 20px 0;">
+                
+                <!-- ★★★ 準備被截圖的「大畫布」 (寬度定為 1000px 確保 3x4 比例完美直立) ★★★ -->
+                <div id="annualExportWrapper" style="background: #000; padding: 40px 30px; width: 1000px; box-sizing: border-box; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;">
+                    
+                    <!-- 蘋果風 年份大標題與圖例 -->
+                    <div style="display: flex; justify-content: space-between; align-items: flex-end; margin-bottom: 35px; padding: 0 10px; border-bottom: 1px solid #2c2c2e; padding-bottom: 20px;">
+                        <div>
+                            <div id="exportYearTitle" style="color: #ff453a; font-size: 4rem; font-weight: 900; letter-spacing: 1px; line-height: 1;">2026年</div>
+                        </div>
+                        <div style="font-size: 1.2rem; text-align: right; line-height: 1.6; font-weight:bold; display: flex; gap: 20px;">
+                            <span style="color:#32d74b; display: flex; align-items: center; gap: 5px;"><span style="display:inline-block; width:12px; height:12px; background:#32d74b; border-radius:50%;"></span> 休假</span>
+                            <span style="color:#ff453a; display: flex; align-items: center; gap: 5px;"><span style="display:inline-block; width:12px; height:12px; background:#ff453a; border-radius:50%;"></span> 上班</span>
+                        </div>
+                    </div>
+
+                    <!-- 12 個月日曆網格 -->
+                    <div id="annualCalendarContainer" style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 35px 25px;">
+                        <!-- 12個月的方格將由 JS 自動產生 -->
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
 </body>
 </html>
